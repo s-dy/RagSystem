@@ -1,0 +1,23 @@
+[project]
+name = "hybridrag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dotenv>=0.9.9",
+    "jionlp>=1.5.27",
+    "jsonpath-python>=1.1.4",
+    "langchain>=1.2.0",
+    "langchain-milvus>=0.3.2",
+    "langchain-ollama>=1.0.1",
+    "langchain-openai>=1.1.6",
+    "langchain-text-splitters>=1.1.0",
+    "matplotlib>=3.10.8",
+    "numpy>=2.3.5",
+    "psutil>=7.1.3",
+    "python-docx>=1.2.0",
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+    "transformers>=4.57.3",
+]
