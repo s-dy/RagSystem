@@ -1,15 +1,19 @@
-import os
 from pathlib import Path
+import os
 
+from src.monitoring.logger import monitor_task_status
 from utils.environ import set_huggingface_hf_env
 set_huggingface_hf_env()
-from sentence_transformers import CrossEncoder
+from sentence_transformers import SentenceTransformer, util
 
-class CrossEncoderRanker:
-    """交叉编码器"""
-    def __init__(self):
-        # 加载预训练的交叉编码器模型
-        local_model_path = os.getenv('HOME')+os.getenv('HF_MODELS_PATH')+"/models--cross-encoder--ms-marco-MiniLM-L-6-v2/snapshots/"
+
+class DocumentGrader:
+    """评估文档相关性"""
+    def __init__(self,threshold:float=0.7):
+        """
+        :param threshold:  相关性阈值
+        """
+        local_model_path = os.getenv('HOME')+os.getenv('HF_MODELS_PATH')+"/models--BAAI--bge-large-zh-v1.5/snapshots/"
         # 获取最新的snapshot
         snapshots_dir = Path(local_model_path)
         if snapshots_dir.exists():
@@ -19,38 +23,33 @@ class CrossEncoderRanker:
                 latest_snapshot = snapshot_dirs[0]
                 model_path = str(latest_snapshot)
                 print(f"使用本地模型路径: {model_path}")
-                self.model = CrossEncoder(model_path, max_length=512)
+                self.model = SentenceTransformer(model_path)
             else:
                 raise FileNotFoundError("未找到模型快照目录")
         else:
-            self.model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+            self.model = SentenceTransformer('BAAI/bge-large-zh-v1.5')
 
-    def reranker(self,query:str,retrieved_docs:list[str]) -> list[tuple[str,float]]:
-        # 生成查询-文档对
-        pairs = [(query, doc) for doc in retrieved_docs]
-        # 预测相关性分数
-        scores = self.model.predict(pairs)
-        # 按分数降序排序
-        reranked_docs = sorted(zip(retrieved_docs, scores), key=lambda x: x[1], reverse=True)
-        # 输出重排序结果
-        # print("重排序后结果:")
-        # for i, (doc, score) in enumerate(reranked_docs):
-        #     print(f"{i + 1}. [Score: {score:.4f}] {doc}")
-        return reranked_docs
+        self.threshold = threshold
+
+    def grade(self, question: str, docs: list) -> bool:
+        if not docs:
+            return False
+        # 将文档内容合并
+        combined_docs = "\n".join(docs)
+        # 计算嵌入向量
+        question_embedding = self.model.encode(question,convert_to_tensor=True)
+        docs_embedding = self.model.encode(combined_docs,convert_to_tensor=True)
+
+        # 计算余弦相似度
+        similarity = util.pytorch_cos_sim(question_embedding,docs_embedding).item()
+        monitor_task_status('doc score with question',similarity)
+        return similarity >= self.threshold
 
 if __name__ == '__main__':
     from dotenv import load_dotenv
     load_dotenv()
-    # 查询和检索到的文档
-    query = "什么是深度学习？"
     query = "搜索美食方面的一些文章，并进行总结"
     retrieved_docs = [
-        "深度学习是机器学习的一个分支，主要使用神经网络进行特征学习",
-        "机器学习包含监督学习、无监督学习和强化学习",
-        "神经网络由多个层次组成，包括输入层、隐藏层和输出层",
-        "深度学习在计算机视觉和自然语言处理中有广泛应用"
-    ]
-    retrieved_docs= [
         """2. 美食天下_原创菜谱与美食生活社区，我所有的朋友都是吃货！
    链接: https://www.meishichina.com/
    正文: 美食天下
@@ -376,4 +375,5 @@ By 热带猫仔
    链接: https://cn.tripadvisor.com/Restaurants-g308272-zfn8277445-Shanghai.html
    摘要: 上海市 (虹口区) 餐厅：在Tripadvisor查看中国上海市 (虹口区) 餐厅的点评，并以价格、地点及更多选项进行搜索。..."""
     ]
-    print(CrossEncoderRanker().reranker(query, retrieved_docs))
+    retrieved_docs = ['12']
+    print(DocumentGrader().grade(query,retrieved_docs))

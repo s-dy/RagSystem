@@ -15,7 +15,7 @@ class FusionRetrieve:
             client_config = MilvusConfig(collection_name=collection_name)
             vector_client = MilvusExecutor(client_config).client
             # rrf重排序
-            result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="rrf",ranker_params={"k":70})
+            result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="rrf",ranker_params={"k":100})
             # 权重重排序
             # result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="weighted",ranker_params={"weights":[0.7, 0.3]})
             # 过滤

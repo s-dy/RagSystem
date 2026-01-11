@@ -1,5 +1,4 @@
 import json
-
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -9,7 +8,6 @@ from typing import Optional, Dict, Any, List
 from pydantic import Field, BaseModel
 from langchain.tools import BaseTool
 import trafilatura
-from trafilatura.settings import use_config
 
 from src.monitoring.logger import monitor_task_status
 

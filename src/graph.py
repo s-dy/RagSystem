@@ -1,6 +1,6 @@
 import re
+import time
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -18,6 +18,8 @@ from src.core.shared.fusion_retrieve import FusionRetrieve
 from src.core.shared.task_analyzer import TaskCharacteristics, TaskAnalyzer, TaskType
 from src.monitoring.langfuse_monitor import langfuse_handler
 from src.monitoring.logger import monitor_task_status
+from src.services.CrossEncoderRanker import CrossEncoderRanker
+from src.services.GradeModel import DocumentGrader
 from src.services.llm.models import get_qwen_model, get_embedding_model
 from src.services.relation_db import MySQLConnector
 from src.services.tools.ToolsPool import ToolsPool
@@ -29,21 +31,9 @@ class State(MessagesState):
     original_query: str  # 原始查询
     task_characteristics: Optional[TaskCharacteristics] # 任务分析特征
     need_retrieval: bool  # 是否需要增强检索
-    enhanced_queries: Optional[List[Dict[str,Any]]]  # 增强查询
     router_index: Optional[Dict[str, List[str]]] # 查询路由
     search_content: Optional[str]  # 检索内容整合
     run_count: int  # 运行次数
-
-
-class GradeDocuments(BaseModel):
-    """Binary score for relevance check on retrieved documents."""
-    binary_score: str = Field(
-        description="检索到的文档与问题相关性，'yes' or 'no'"
-    )
-    reasoning: Optional[str] = Field(
-        description="简要推理",
-        default=None
-    )
 
 
 def get_last_user_msg(messages: List[AnyMessage]):
@@ -68,8 +58,7 @@ class Graph:
         graph = StateGraph(State)
 
         graph.add_node('generate_query_or_respond', self._generate_query_or_respond)
-        graph.add_node('query_enhancer', self._query_enhancer)
-        graph.add_node('query_router', self._query_router)
+        graph.add_node('query_enhancer_and_route', self._query_enhancer_and_route)
         graph.add_node('fusion_retrieve', self._fusion_retrieve)
         graph.add_node('generate_response', self._generate_response)
         # graph.add_node('grade_answer_quality',self._grade_answer_quality)
@@ -78,11 +67,10 @@ class Graph:
         # 构建图结构
         graph.add_edge(START, 'generate_query_or_respond')
         graph.add_conditional_edges('generate_query_or_respond', self._retrieve_condition,
-                                    {'retrieve': 'query_enhancer', 'end': END})
-        graph.add_edge('query_enhancer', 'query_router')
-        graph.add_edge('query_router', 'fusion_retrieve')
+                                    {'retrieve': 'query_enhancer_and_route', 'end': END})
+        graph.add_edge('query_enhancer_and_route', 'fusion_retrieve')
         graph.add_conditional_edges('fusion_retrieve', self._grade_documents,
-                                    {'rewrite': 'query_enhancer', 'generate': 'generate_response'})
+                                    {'rewrite': 'query_enhancer_and_route', 'generate': 'generate_response'})
         graph.add_edge('generate_response', END)
         # graph.add_edge('generate_response', 'grade_answer_quality')
         # graph.add_conditional_edges('grade_answer_quality', self._grade_answer_quality_conditional,{'good':END,'bad':'try_different_approach'})
@@ -92,7 +80,7 @@ class Graph:
         async with (AsyncRedisSaver.from_conn_string(REDIS_URI) as redis_checkpointer,AsyncRedisStore.from_conn_string(REDIS_URI) as redis_store):
             self.workflow = graph.compile(checkpointer=redis_checkpointer,store=redis_store)
 
-    async def _generate_query_or_respond(self, state: State) -> dict:
+    async def _generate_query_or_respond(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
         """决定是使用检索工具搜索信息，还是直接回复用户"""
         monitor_task_status("---GENERATE QUERY OR RESPOND---")
         query = get_last_user_msg(state['messages'])
@@ -101,7 +89,10 @@ class Graph:
         task_analyzer = TaskAnalyzer()
         task_char = task_analyzer.analyze_task(query)
         monitor_task_status("Task Analysis Result", repr(task_char))
-
+        thread_id = config['configurable'].get('thread_id','default')
+        user_id = config['configurable'].get('user_id','default')
+        if thread_id and user_id:
+            await store.aput((user_id,thread_id,), key=f"task_analyzer_{int(time.time()*1000)}", value={"query":query,'result':repr(task_char)})
 
         prompt = ChatPromptTemplate.from_template("""
         你需要判断用户的查询是否需要检索外部信息来回答。
@@ -123,6 +114,8 @@ class Graph:
         response = await chain.ainvoke({'query': query})
         # 检查是否需要检索
         if response.strip() == "NEED_RETRIEVAL":
+            if thread_id and user_id:
+                await store.aput((user_id, thread_id,), key=f'need_retrieval_{int(time.time()*1000)}', value={'query':query,"result": True})
             return {
                 'messages': [AIMessage(content="我将为您检索相关信息。")],
                 'original_query':query,
@@ -215,34 +208,40 @@ class Graph:
 
         return QueryEnhancementConfig(**config)
 
-    async def _query_enhancer(self, state: State) -> dict:
-        """查询增强节点"""
+    async def _query_enhancer_and_route(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
+        """查询增强与查询路由节点"""
         monitor_task_status("---ENHANCE QUERY---")
         # 查询增强
         task_char = state.get('task_characteristics')
         # 动态配置 QueryEnhancer
-        config = self._get_enhancer_config_by_task(task_char, state['run_count'])
+        enhancer_config = self._get_enhancer_config_by_task(task_char, state['run_count'])
 
-        enhancer = QueryEnhancer(self.llm,config)
+        enhancer = QueryEnhancer(self.llm,enhancer_config)
         # 获取原始用户查询
         original_query = state['original_query']
         if not original_query:
-            return {'enhanced_queries': []}
-
-        enhanced_queries = await enhancer.enhance(original_query)
-        # 返回增强后的查询列表
+            enhanced_queries = []
+        else:
+            enhanced_queries = await enhancer.enhance(original_query)
+        # 增强后的查询列表
         if not enhanced_queries:
             enhanced_queries = enhancer.parse_query_time([original_query])  # 回退到原始查询
-        return {'enhanced_queries': enhanced_queries,'run_count':state.get('run_count', 0) + 1}
 
-    async def _query_router(self, state: State) -> dict:
-        """查询路由节点"""
+        thread_id = config['configurable'].get('thread_id', 'default')
+        user_id = config['configurable'].get('user_id', 'default')
+        if thread_id and user_id:
+            await store.aput((user_id, thread_id,), key=f'query_enhancer_{int(time.time()*1000)}',
+                value={
+                    "enhanced_queries": enhanced_queries,
+                    "enhancer_config": enhancer_config
+                },
+            )
+
+        # 查询路由节点
         monitor_task_status("---QUERY ROUTING---")
         query_route = QueryRouter(self.llm)
         # 获取知识库配置
         knowledge_bases = MySQLConnector().get_all_collections()
-        enhanced_queries = state.get('enhanced_queries', [])
-
         queries = [_['query'] for _ in enhanced_queries]
         route_result = await query_route.multi_all_queries_index_router(queries, knowledge_bases)
         internal_routes = {}
@@ -250,14 +249,7 @@ class Graph:
         for route in route_result:
             idx = route["index"]
             internal_routes[idx] = queries
-        # 一次路由一个查询的处理方式
-        # for query, routes in route_result:
-        #     for route in routes:
-        #         idx = route["index"]
-        #         if idx not in internal_routes:
-        #             internal_routes[idx] = []
-        #         internal_routes[idx].append(query)
-        return {'router_index': internal_routes}
+        return {'router_index': internal_routes,'run_count':state.get('run_count', 0) + 1}
 
     async def _retrieve_internal(self,router_index):
         """处理内部检索"""
@@ -292,8 +284,8 @@ class Graph:
         prompt = ChatPromptTemplate.from_template("""
         你是一个优化在搜索引擎中搜索查询的助手，需要重写用户问题，便于使用搜索引擎搜索。
         
-        用户问题：
-        {question}
+        以下是需要重写的用户问题：
+        【{question}】
         
         要求：
         1. 只返回最终的答案，不用返回其他无关内容。
@@ -303,11 +295,12 @@ class Graph:
         monitor_task_status('rewrite search query',search_query)
         search_tool = ToolsPool().get_tool('bing_search')
         search_result = await search_tool.ainvoke(search_query)
-        external_docs.append(search_result)
+        external_docs = search_result.split('\n\n')
+        # external_docs.append(search_result)
         monitor_task_status('外部工具调用完成',external_docs)
         return external_docs
 
-    async def _fusion_retrieve(self, state: State) -> dict:
+    async def _fusion_retrieve(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
         """融合检索节点"""
         monitor_task_status("---FUSION RETRIEVAL---")
         task_characteristics = state.get('task_characteristics')
@@ -320,7 +313,6 @@ class Graph:
             external_docs = await self._retrieve_external(state['original_query'])
         # 合并结果
         all_docs = internal_docs + external_docs
-
         # 去重结果
         seen = set()
         unique_docs = []
@@ -332,9 +324,18 @@ class Graph:
                 seen.add(normalized)
                 unique_docs.append(doc)
 
+        unique_docs = CrossEncoderRanker().reranker(state['original_query'], unique_docs)
+
         monitor_task_status("fusion_unique_docs", unique_docs)
         if unique_docs:
-            content = "\n\n".join(unique_docs)  # 限制内容长度
+            thread_id = config['configurable'].get('thread_id', 'default')
+            user_id = config['configurable'].get('user_id', 'default')
+            if thread_id and user_id:
+                await store.aput((user_id, thread_id,),key=f"final_retrieval_{int(time.time()*1000)}",value={
+                    "unique_docs_count": len(unique_docs),
+                    "docs": unique_docs
+                })
+            content = "\n\n".join([doc for doc,score in unique_docs])
             return {
                 'search_content': content
             }
@@ -352,31 +353,7 @@ class Graph:
             monitor_task_status('not enough question or documents or achieve max retries')
             return 'generate'
 
-        prompt = ChatPromptTemplate.from_template("""
-            您是一名评分者，正在评估检索到的文档与用户问题的相关性。
-
-            请严格按照以下 JSON 格式输出您的评分结果：
-            {{
-                "binary_score": "yes" or "no",
-            }}
-
-            检索到的文档：
-            {docs}
-
-            用户提问：
-            {question}
-            
-            1. 如果文档包含与用户问题相关的关键字或语义，请将 binary_score 设置为 "yes"，否则设置为 "no"。
-            """)
-        # 首次检索：用 LLM 评分
-        if state['run_count'] == 1:
-            chain = prompt | self.llm.with_structured_output(GradeDocuments)
-            score = await chain.ainvoke({'question': question, 'docs': docs})
-            is_relevant = (score.binary_score == "yes")
-        else:
-            # 重试时：用关键词匹配
-            is_relevant = self._keyword_relevance(question, docs)
-        monitor_task_status('grade_documents relevant', is_relevant)
+        is_relevant = DocumentGrader().grade(question, [docs])
         if is_relevant:
             return "generate"
         else:
@@ -389,7 +366,7 @@ class Graph:
         common = q_words & d_words
         return len(common) >= max(1, len(q_words) // 3)  # 至少匹配1/3关键词
 
-    async def _generate_response(self, state: State) -> dict:
+    async def _generate_response(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
         """生成最终响应"""
         monitor_task_status("---GENERATE FINAL RESPONSE---")
 
@@ -406,7 +383,7 @@ class Graph:
 
         规则：
         1. 如果【上下文】包含问题的答案，请用简洁、准确的语言回答。
-        2. 如果【上下文】与问题无关或信息不足，请回答："根据现有资料，无法回答该问题。"
+        2. 如果【上下文】与问题无关或信息不足，请只回答："根据现有资料，无法回答该问题。"
         3. 严格按照【上下文】中的内容回答，不要编造信息，不要提及"上下文"或"文档"，直接给出答案。
         4. 回答尽量简短。
         5. 如果答案来自多个来源，进行总结和整合。
@@ -434,6 +411,15 @@ class Graph:
         # 调用模型生成响应
         response = await chain.ainvoke({'query': question, 'content': docs_content})
 
+        thread_id = config['configurable'].get('thread_id', 'default')
+        user_id = config['configurable'].get('user_id', 'default')
+        if thread_id and user_id:
+            await store.aput((user_id, thread_id,), key=f"final_response_{int(time.time() * 1000)}", value={
+                "question": question,
+                "response": response,
+                "context_used": docs_content
+            })
+
         return {"messages": [AIMessage(content=response)]}
 
     @property
@@ -449,7 +435,7 @@ if __name__ == '__main__':
 
         # 测试用例1：需要检索的问题
         inputs = {
-            "messages": [{"role": "user", "content": "搜索transformer的一些讲解文章，并进行总结"}],
+            "messages": [{"role": "user", "content": "搜索美食方面的一些文章，并进行总结"}],
         }
         user_id = "1"
         config:RunnableConfig = {'configurable':{'thread_id':'1','user_id':user_id}}
