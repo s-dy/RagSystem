@@ -10,5 +10,6 @@ wheels/
 .venv
 .env
 .idea
+.langgraph_api/
 src/crawler/data/
 docs/

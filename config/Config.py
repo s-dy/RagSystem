@@ -31,3 +31,11 @@ class MilvusConfig:
 
 REDIS_URI = "redis://localhost:6379"
 os.environ['REDIS_URL'] = REDIS_URI
+
+# MCP服务
+MCP_SERVER = {
+    "bing_search": {
+        "transport": "http",
+        "url": "http://localhost:8080/mcp",
+    }
+}

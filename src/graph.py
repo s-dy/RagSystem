@@ -1,3 +1,4 @@
+import os
 import re
 import time
 from typing import List, Optional, Literal, Dict, Any
@@ -57,7 +58,7 @@ class Graph:
     async def _init_graph(self):
         graph = StateGraph(State)
 
-        graph.add_node('generate_query_or_respond', self._generate_query_or_respond)
+        graph.add_node('retrieve_or_respond', self._retrieve_or_respond)
         graph.add_node('query_enhancer_and_route', self._query_enhancer_and_route)
         graph.add_node('fusion_retrieve', self._fusion_retrieve)
         graph.add_node('generate_response', self._generate_response)
@@ -65,8 +66,8 @@ class Graph:
         # graph.add_node('try_different_approach',self._try_different_approach)
 
         # 构建图结构
-        graph.add_edge(START, 'generate_query_or_respond')
-        graph.add_conditional_edges('generate_query_or_respond', self._retrieve_condition,
+        graph.add_edge(START, 'retrieve_or_respond')
+        graph.add_conditional_edges('retrieve_or_respond', self._retrieve_condition,
                                     {'retrieve': 'query_enhancer_and_route', 'end': END})
         graph.add_edge('query_enhancer_and_route', 'fusion_retrieve')
         graph.add_conditional_edges('fusion_retrieve', self._grade_documents,
@@ -76,11 +77,13 @@ class Graph:
         # graph.add_conditional_edges('grade_answer_quality', self._grade_answer_quality_conditional,{'good':END,'bad':'try_different_approach'})
         # graph.add_conditional_edges('try_different_approach',self._try_different_approach_conditional,{'yes':'query_enhancer','no':END})
 
+        if os.getenv('IS_LANGSMITH') == 'True':
+            self.workflow = graph.compile()
+        else:
+            async with (AsyncRedisSaver.from_conn_string(REDIS_URI) as redis_checkpointer,AsyncRedisStore.from_conn_string(REDIS_URI) as redis_store):
+                self.workflow = graph.compile(checkpointer=redis_checkpointer,store=redis_store)
 
-        async with (AsyncRedisSaver.from_conn_string(REDIS_URI) as redis_checkpointer,AsyncRedisStore.from_conn_string(REDIS_URI) as redis_store):
-            self.workflow = graph.compile(checkpointer=redis_checkpointer,store=redis_store)
-
-    async def _generate_query_or_respond(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
+    async def _retrieve_or_respond(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
         """决定是使用检索工具搜索信息，还是直接回复用户"""
         monitor_task_status("---GENERATE QUERY OR RESPOND---")
         query = get_last_user_msg(state['messages'])

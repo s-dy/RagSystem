@@ -1,7 +1,10 @@
 from typing import Any
 from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from config.Config import MCP_SERVER
 from src.monitoring.logger import monitor_task_status
+from utils.async_task import async_run
 from utils.decortor import singleton
 
 
@@ -11,21 +14,29 @@ class ToolsPool:
         self.tools:dict[str,BaseTool] = {}
 
         self.system_default_tools()
+        self.init_mcp_tools()
 
     def system_default_tools(self):
         """系统默认工具"""
-        from src.services.tools import BingSearchTool
-        bing_tool = BingSearchTool(name="bing_search",description="使用Bing搜索引擎进行网页搜索",max_results=5,extract=True)
-        self.add_tool(bing_tool)
-
         from langchain_community.tools import DuckDuckGoSearchResults
         ddg_tool = DuckDuckGoSearchResults(name='ddg_search')
         self.add_tool(ddg_tool)
 
+    def init_mcp_tools(self):
+        # 连接到 MCP 服务器
+        client = MultiServerMCPClient(MCP_SERVER)
+
+        # 获取工具
+        for server in MCP_SERVER.keys():
+            tools = async_run(client.get_tools(server_name=server))
+            print(f"{server} 已获取 {len(tools)} 个工具")
+            [self.add_tool(tool) for tool in tools]
+
+
     def add_tool(self, tool):
         """添加工具"""
         if isinstance(tool,BaseTool):
-            monitor_task_status('add tool 【langchain tool】',tool.name)
+            monitor_task_status('add tool',tool.name)
             self.tools[tool.name] = tool
 
     def get_tool(self,name) -> BaseTool:
@@ -57,5 +68,5 @@ class ToolsPool:
         return "\n".join(result)
 
 if __name__ == '__main__':
-    print(ToolsPool().call_tool('ddg_search','搜索美食方面的一片文章，并进行解析'))
+    print(ToolsPool().call_tool('bing_search', {'query':'搜索美食方面的一片文章，并进行解析'}))
     print(ToolsPool().get_tools())
