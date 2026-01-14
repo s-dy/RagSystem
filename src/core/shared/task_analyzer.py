@@ -269,6 +269,44 @@ class TaskAnalyzer:
                 continue
         return list(set(entities))  # 去重
 
+    async def analyze_task_with_context(self, query: str, conversation_context: str = "", user_id: str = "default") -> TaskCharacteristics:
+        """分析任务特征（考虑对话上下文和用户历史）"""
+        query_lower = query.lower()
+
+        # 1. 识别任务类型
+        task_type_scores = self._identify_task_type(query_lower)
+        primary_task_type = max(task_type_scores.items(), key=lambda x: x[1])[0]
+
+        # 2. 提取基础特征
+        entities = self.extract_entities(query)
+        action_verbs = self._extract_action_verbs(query_lower)
+        numeric_values = self._extract_numeric_values(query)
+        comparison_count = self._count_comparisons(query_lower)
+
+        # 3. 分析执行特征
+        execution_features = self._analyze_execution_features(
+            query_lower, primary_task_type, action_verbs
+        )
+        
+        # 4. 基于对话上下文和用户历史调整特征
+        contextual_adjustments = await self._apply_contextual_adjustments(
+            query, conversation_context, user_id, primary_task_type
+        )
+        
+        # 5. 合并特征
+        execution_features.update(contextual_adjustments)
+
+        # 6. 组合所有特征
+        characteristics = TaskCharacteristics(
+            task_type=primary_task_type,
+            entities=entities,
+            action_verbs=action_verbs,
+            numeric_values=numeric_values,
+            comparison_count=comparison_count,
+            **execution_features
+        )
+
+        return characteristics
 
 if __name__ == '__main__':
     analyzer = TaskAnalyzer()

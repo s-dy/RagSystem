@@ -15,10 +15,11 @@ class FusionRetrieve:
             client_config = MilvusConfig(collection_name=collection_name)
             vector_client = MilvusExecutor(client_config).client
             # rrf重排序
-            result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="rrf",ranker_params={"k":100})
+            # result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="rrf",ranker_params={"k":100})
             # 权重重排序
-            # result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="weighted",ranker_params={"weights":[0.7, 0.3]})
+            result =  await vector_client.asimilarity_search_with_score(query,k=4,ranker_type="weighted",ranker_params={"weights":[0.7, 0.3]})
             # 过滤
+            # print(result)
             result = [doc.page_content for doc,score in result if score >= 0.2]
             monitor_task_status(f"搜索查询 【{query}】: 【{result}】")
             return result
@@ -39,4 +40,4 @@ class FusionRetrieve:
 
 if __name__ == '__main__':
     from utils.async_task import async_run
-    async_run(FusionRetrieve().search_queries(['茅台的新闻?'],collection_name='hybridRag_news'))
+    async_run(FusionRetrieve().search_queries(['黄独分布在哪些地区？'],collection_name='cmrc_dataset'))

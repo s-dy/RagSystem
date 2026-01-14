@@ -1,4 +1,5 @@
 from typing import Any
+import json
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -12,9 +13,12 @@ from utils.decortor import singleton
 class ToolsPool:
     def __init__(self):
         self.tools:dict[str,BaseTool] = {}
+        self.init_instance = False
 
+    async def initialize(self, *args, **kwargs):
         self.system_default_tools()
-        self.init_mcp_tools()
+        await self.init_mcp_tools()
+        self.init_instance = True
 
     def system_default_tools(self):
         """系统默认工具"""
@@ -22,15 +26,18 @@ class ToolsPool:
         ddg_tool = DuckDuckGoSearchResults(name='ddg_search')
         self.add_tool(ddg_tool)
 
-    def init_mcp_tools(self):
+    async def init_mcp_tools(self):
         # 连接到 MCP 服务器
         client = MultiServerMCPClient(MCP_SERVER)
 
         # 获取工具
         for server in MCP_SERVER.keys():
-            tools = async_run(client.get_tools(server_name=server))
-            print(f"{server} 已获取 {len(tools)} 个工具")
-            [self.add_tool(tool) for tool in tools]
+            try:
+                tools = await client.get_tools(server_name=server)
+                print(f"{server} 已获取 {len(tools)} 个工具")
+                [self.add_tool(tool) for tool in tools]
+            except Exception as e:
+                monitor_task_status(f'MCP工具【{server}】获取失败',e)
 
 
     def add_tool(self, tool):
@@ -46,7 +53,7 @@ class ToolsPool:
     def get_tools(self) -> dict[str,BaseTool]:
         return self.tools
 
-    def call_tool(self,name:str,tool_input:str | dict[str, Any],*args,**kwargs):
+    async def call_tool(self,name:str,tool_input:str | dict[str, Any],*args,**kwargs):
         """调用工具"""
         tool = self.get_tool(name)
         if not tool:
@@ -54,7 +61,9 @@ class ToolsPool:
         for _ in range(3):
             try:
                 if isinstance(tool,BaseTool):
-                    return tool.invoke(tool_input,*args,**kwargs)
+                    result = await tool.ainvoke(tool_input,*args,**kwargs)
+                    monitor_task_status('call tool result',result)
+                    return result
             except Exception as e:
                 monitor_task_status(f'tool call error 【{name}】',e)
 
@@ -67,6 +76,26 @@ class ToolsPool:
 
         return "\n".join(result)
 
+    def get_response(self,response) -> list:
+        result = []
+        if not response:
+            return []
+        for item in response:
+            if isinstance(item,dict) and 'text' in item:
+                cur = item['text']
+                if not cur:
+                    continue
+                try:
+                    cur = json.loads(cur)
+                except Exception as e:
+                    pass
+                result.append(cur)
+        return result
+
+
 if __name__ == '__main__':
-    print(ToolsPool().call_tool('bing_search', {'query':'搜索美食方面的一片文章，并进行解析'}))
-    print(ToolsPool().get_tools())
+    pool = ToolsPool()
+    async_run(pool.initialize())
+    result = pool.call_tool('crawl_webpage', {'uuids':['1'],"url_map":{"1":'https://www.sohu.com/a/804240518_122031860'}})
+    print(pool.get_response(result))
+

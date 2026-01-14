@@ -19,7 +19,7 @@ class QueryEnhancer(ParallelChain):
         self.llm_client = llm_client
         self.time_parse_tool = TimeParseTool(config={'include_source': True, 'strict_mode': False})
 
-    async def enhance(self, query: str, user_context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    async def enhance(self, query: str, user_context: Dict[str, Any] = None, conversation_context: str = "") -> List[Dict[str, Any]]:
         """增强查询"""
         monitor_task_status('query enhancer starting...')
         enhanced_queries = [query]  # 始终包含原始查询
@@ -42,7 +42,7 @@ class QueryEnhancer(ParallelChain):
         if self.config.enable_query_decomposition and (task := self._decompose_query(query)):
             self.task_map['decomposition'] = task
 
-        if self.config.hyde_predict and (task := self._predict_query(query)):
+        if self.config.hyde_predict and (task := self._predict_query_with_context(query,conversation_context)):
             self.task_map['predict'] = task
 
         # 并行执行所有增强任务
@@ -103,17 +103,34 @@ class QueryEnhancer(ParallelChain):
         """
         return self.create_chain(paraphrase_prompt,parse='json',config={"llm_temperature": 0.2})
 
-    def _predict_query(self,query:str) -> RunnableSerializable:
-        """HyDE predict"""
-        prompt = """
-        回答以下问题：
-        
-        严格遵循以下要求：
-        1. 只输出答案即可，不用返回其他无关内容。
-        2. 如果问题中带有时间，你不需要提供准确的时间,使用问题中提供的时间即可。
+    
+    def _predict_query_with_context(self, query: str, conversation_context: str = "") -> RunnableSerializable:
+        """HyDE predict（考虑对话历史）"""
+        if conversation_context:
+            prompt = """
+            根据对话历史和当前问题，回答以下问题：
+            
+            对话历史：
+            {conversation_context}
+            
+            当前问题：
+            {query}
+            
+            严格遵循以下要求：
+            1. 只输出答案即可，不用返回其他无关内容。
+            2. 如果问题中带有时间，你不需要提供准确的时间,使用问题中提供的时间即可。
+            3. 考虑对话上下文，提供连贯的回答。
+            """
+        else:
+            prompt = """
+            回答以下问题：
+            
+            严格遵循以下要求：
+            1. 只输出答案即可，不用返回其他无关内容。
+            2. 如果问题中带有时间，你不需要提供准确的时间,使用问题中提供的时间即可。
 
-        问题：{query}
-        """
+            问题：{query}
+            """
         return self.create_chain(prompt,parse='str',config={"llm_temperature": 0.2})
 
     def _decompose_query(self, query: str) -> Optional[RunnableSerializable]:

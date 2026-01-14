@@ -17,6 +17,7 @@ from src.core.shared.adapter import CommonTaskAdapterHandler
 from src.core.shared.query_enhancer import QueryEnhancer
 from src.core.shared.fusion_retrieve import FusionRetrieve
 from src.core.shared.task_analyzer import TaskCharacteristics, TaskAnalyzer, TaskType
+from src.core.shared.memory_manager import get_memory_manager
 from src.monitoring.langfuse_monitor import langfuse_handler
 from src.monitoring.logger import monitor_task_status
 from src.services.CrossEncoderRanker import CrossEncoderRanker
@@ -46,6 +47,29 @@ def get_last_user_msg(messages: List[AnyMessage]):
     return last_msg
 
 
+def get_conversation_context(messages: List[AnyMessage], num_messages: int = 3) -> str:
+    """获取对话上下文，用于多轮对话理解"""
+    if not messages:
+        return ""
+    
+    # 获取最近的几条消息作为上下文
+    recent_messages = messages[-num_messages:] if len(messages) >= num_messages else messages
+    context_parts = []
+    
+    for msg in recent_messages:
+        if isinstance(msg, HumanMessage):
+            role = "用户: "
+        elif isinstance(msg, AIMessage):
+            role = "助手: "
+        else:
+            role = "系统: "
+        context_parts.append(f"{role}{msg.content}")
+    
+    context = "\n".join(context_parts)
+    monitor_task_status('conversation context', context)
+    return context
+
+
 class Graph:
     def __init__(self):
         self.llm = get_qwen_model()
@@ -54,6 +78,8 @@ class Graph:
 
         # 任务适配器
         self.task_adapter_handlers = [CommonTaskAdapterHandler()]
+        # 工具池
+        self.tools_pool = ToolsPool()
 
     async def _init_graph(self):
         graph = StateGraph(State)
@@ -87,6 +113,7 @@ class Graph:
         """决定是使用检索工具搜索信息，还是直接回复用户"""
         monitor_task_status("---GENERATE QUERY OR RESPOND---")
         query = get_last_user_msg(state['messages'])
+        conversation_context = get_conversation_context(state['messages'], num_messages=5)  # 获取更多的上下文信息
 
         # 分析任务特征
         task_analyzer = TaskAnalyzer()
@@ -97,24 +124,29 @@ class Graph:
         if thread_id and user_id:
             await store.aput((user_id,thread_id,), key=f"task_analyzer_{int(time.time()*1000)}", value={"query":query,'result':repr(task_char)})
 
+        # 使用上下文来更好地判断是否需要检索
         prompt = ChatPromptTemplate.from_template("""
-        你需要判断用户的查询是否需要检索外部信息来回答。
+        你需要根据当前查询和对话历史来判断是否需要检索外部信息来回答。
+
+        对话历史：
+        {conversation_context}
+
+        当前查询：
+        {query}
 
         规则：
         1. 如果查询是简单的问候、闲聊或不需要外部知识就能回答的问题，直接回复。
         2. 如果查询需要具体的事实、数据、知识或最新信息，则需要检索。
-        3. 常见的需要检索的情况包括：事实查询、技术问题、新闻事件、专业知识等。
-        4. 常见的可以直接回答的情况包括：问候、简单聊天、无需外部知识的推理问题等。
+        3. 如果当前问题是基于之前对话的追问，且涉及具体信息，也需要检索。
+        4. 常见的需要检索的情况包括：事实查询、技术问题、新闻事件、专业知识等。
+        5. 常见的可以直接回答的情况包括：问候、简单聊天、无需外部知识的推理问题等。
 
         你的响应必须是以下格式之一：
         - 如果直接回答，输出完整的回复内容
         - 如果需要检索，只输出：NEED_RETRIEVAL
-        
-        以下是用户的查询：
-        {query}
         """)
         chain = prompt | self.llm | StrOutputParser()
-        response = await chain.ainvoke({'query': query})
+        response = await chain.ainvoke({'query': query, 'conversation_context': conversation_context})
         # 检查是否需要检索
         if response.strip() == "NEED_RETRIEVAL":
             if thread_id and user_id:
@@ -222,10 +254,12 @@ class Graph:
         enhancer = QueryEnhancer(self.llm,enhancer_config)
         # 获取原始用户查询
         original_query = state['original_query']
+        conversation_context = get_conversation_context(state['messages'], num_messages=5)  # 获取对话上下文
+        
         if not original_query:
             enhanced_queries = []
         else:
-            enhanced_queries = await enhancer.enhance(original_query)
+            enhanced_queries = await enhancer.enhance(original_query,conversation_context=conversation_context)
         # 增强后的查询列表
         if not enhanced_queries:
             enhanced_queries = enhancer.parse_query_time([original_query])  # 回退到原始查询
@@ -296,10 +330,22 @@ class Graph:
         chain = prompt | self.llm | StrOutputParser()
         search_query = await chain.ainvoke({'question': query})
         monitor_task_status('rewrite search query',search_query)
-        search_tool = ToolsPool().get_tool('bing_search')
-        search_result = await search_tool.ainvoke(search_query)
-        external_docs = search_result.split('\n\n')
-        # external_docs.append(search_result)
+        search_result = self.tools_pool.get_response(await self.tools_pool.call_tool('bing_search',{'query':search_query}))
+        uids,uid_map = [],{}
+        if len(search_result):
+            results = search_result[0].get('results')
+        else:
+            results = []
+        for item in results:
+            uids.append(item['uuid'])
+            uid_map[item['uuid']] = item['url']
+        pages_results =  self.tools_pool.get_response(await self.tools_pool.call_tool('crawl_webpage',{'uuids':uids,'url_map':uid_map}))
+        if pages_results:
+            pages_results = pages_results[0]
+        for item in pages_results:
+            if item.get('content'):
+                external_docs.append(item['content'])
+
         monitor_task_status('外部工具调用完成',external_docs)
         return external_docs
 
@@ -356,18 +402,11 @@ class Graph:
             monitor_task_status('not enough question or documents or achieve max retries')
             return 'generate'
 
-        is_relevant = DocumentGrader().grade(question, [docs])
+        is_relevant = DocumentGrader(threshold=0.5).grade(question, [docs])
         if is_relevant:
             return "generate"
         else:
             return "rewrite"
-
-    def _keyword_relevance(self, question: str, docs: str) -> bool:
-        """基于关键词的快速相关性判断"""
-        q_words = set(re.findall(r'\w+', question.lower()))
-        d_words = set(re.findall(r'\w+', docs.lower()))
-        common = q_words & d_words
-        return len(common) >= max(1, len(q_words) // 3)  # 至少匹配1/3关键词
 
     async def _generate_response(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
         """生成最终响应"""
@@ -376,23 +415,30 @@ class Graph:
         # 获取原始用户查询
         question = state['original_query']
         if not question:
-            return {"messages": [AIMessage(content="未找到用户查询。")]}
+            return {"messages": [AIMessage(content="未找到用户查询。")], "search_content": ""}
 
         # 获取检索到的文档内容
         docs_content = state.get('search_content') or "未找到相关信息"
+        
+        # 获取对话上下文
+        conversation_context = get_conversation_context(state['messages'], num_messages=5)
 
         SYSTEM_PROMPT = """
-        你是一个专业、严谨的智能助手，请严格根据以下提供的【上下文】回答用户问题。
+        你是一个专业、严谨的智能助手，请根据以下【检索到的信息】和【对话历史】来回答用户问题。
+
+        检索到的信息：
+        {content}
+        
+        对话历史：
+        {conversation_context}
 
         规则：
-        1. 如果【上下文】包含问题的答案，请用简洁、准确的语言回答。
-        2. 如果【上下文】与问题无关或信息不足，请只回答："根据现有资料，无法回答该问题。"
-        3. 严格按照【上下文】中的内容回答，不要编造信息，不要提及"上下文"或"文档"，直接给出答案。
-        4. 回答尽量简短。
-        5. 如果答案来自多个来源，进行总结和整合。
-
-        【上下文】
-        {content}
+        1. 如果【检索到的信息】包含问题的答案，请结合对话历史，用简洁、准确的语言回答。
+        2. 如果【检索到的信息】与问题无关或信息不足，但对话历史中有相关信息，请参考已有对话进行回答。
+        3. 如果【检索到的信息】与对话历史都无相关信息，请只回答："根据现有资料，无法回答该问题。"
+        4. 严格按照【检索到的信息】和【对话历史】中的内容回答，不要编造信息。
+        5. 回答要连贯，符合对话上下文。
+        6. 如果答案来自多个来源，进行总结和整合。
         """
         system_msg = SYSTEM_PROMPT
         if self.task_adapter_handlers:
@@ -412,7 +458,7 @@ class Graph:
         chain = prompt | self.llm | StrOutputParser()
 
         # 调用模型生成响应
-        response = await chain.ainvoke({'query': question, 'content': docs_content})
+        response = await chain.ainvoke({'query': question, 'content': docs_content, 'conversation_context': conversation_context})
 
         thread_id = config['configurable'].get('thread_id', 'default')
         user_id = config['configurable'].get('user_id', 'default')
@@ -420,7 +466,8 @@ class Graph:
             await store.aput((user_id, thread_id,), key=f"final_response_{int(time.time() * 1000)}", value={
                 "question": question,
                 "response": response,
-                "context_used": docs_content
+                "context_used": docs_content,
+                "conversation_context": conversation_context
             })
 
         return {"messages": [AIMessage(content=response)]}
@@ -429,6 +476,8 @@ class Graph:
     async def graph(self):
         if self.workflow is None:
             await self._init_graph()
+        if not self.tools_pool.init_instance:
+            await self.tools_pool.initialize()
         return self.workflow.with_config(callbacks=[langfuse_handler])
 
 
@@ -438,7 +487,7 @@ if __name__ == '__main__':
 
         # 测试用例1：需要检索的问题
         inputs = {
-            "messages": [{"role": "user", "content": "搜索美食方面的一些文章，并进行总结"}],
+            "messages": [{"role": "user", "content": "什么是烯酮？"}],
         }
         user_id = "1"
         config:RunnableConfig = {'configurable':{'thread_id':'1','user_id':user_id}}
@@ -448,10 +497,6 @@ if __name__ == '__main__':
                 print(f"Node '{key}':")
                 if "messages" in value:
                     print(f"内容: {value['messages'][-1]}")
-                elif "enhanced_queries" in value:
-                    print(f"增强查询: {value['enhanced_queries']}")
-                elif "search_content" in value:
-                    print(f"检索内容（摘要）: {value['search_content']}...")
                 print("-" * 50)
 
     async_run(test_main())
