@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
 import os
 
+@dataclass
+class RagSystemConfig:
+
+    # 引用检索到文档的最大数量
+    max_use_doc:int = 3
 
 @dataclass
 class QueryEnhancementConfig:

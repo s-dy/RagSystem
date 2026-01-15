@@ -46,7 +46,7 @@ class QueryEnhancer(ParallelChain):
             self.task_map['predict'] = task
 
         # 并行执行所有增强任务
-        responses = await self.runnable_parallel({'query': query})
+        responses = await self.runnable_parallel({'query': query,'conversation_context': conversation_context})
         enhanced_queries = self.parse_parallel_response(responses)
         # 去重
         enhanced_queries = self._deduplicate_queries(enhanced_queries)

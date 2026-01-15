@@ -18,7 +18,7 @@ class CrossEncoderRanker:
             if snapshot_dirs:
                 latest_snapshot = snapshot_dirs[0]
                 model_path = str(latest_snapshot)
-                print(f"使用本地模型路径: {model_path}")
+                # print(f"使用本地模型路径: {model_path}")
                 self.model = CrossEncoder(model_path, max_length=512)
             else:
                 raise FileNotFoundError("未找到模型快照目录")

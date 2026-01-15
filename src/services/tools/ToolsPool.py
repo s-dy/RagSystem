@@ -22,9 +22,9 @@ class ToolsPool:
 
     def system_default_tools(self):
         """系统默认工具"""
-        from langchain_community.tools import DuckDuckGoSearchResults
-        ddg_tool = DuckDuckGoSearchResults(name='ddg_search')
-        self.add_tool(ddg_tool)
+        # from langchain_community.tools import DuckDuckGoSearchResults
+        # ddg_tool = DuckDuckGoSearchResults(name='ddg_search')
+        # self.add_tool(ddg_tool)
 
     async def init_mcp_tools(self):
         # 连接到 MCP 服务器

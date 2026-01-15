@@ -11,7 +11,7 @@ from langgraph.store.redis import AsyncRedisStore,BaseStore
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from langgraph.graph import MessagesState, StateGraph, START, END
 
-from config.Config import QueryEnhancementConfig,REDIS_URI
+from config.Config import QueryEnhancementConfig,REDIS_URI,RagSystemConfig
 from src.core.router.query_router import QueryRouter
 from src.core.shared.adapter import CommonTaskAdapterHandler
 from src.core.shared.query_enhancer import QueryEnhancer
@@ -71,7 +71,10 @@ def get_conversation_context(messages: List[AnyMessage], num_messages: int = 3) 
 
 
 class Graph:
-    def __init__(self):
+    def __init__(self,config: RagSystemConfig = None):
+        if not config:
+            config = RagSystemConfig()
+        self.config = config
         self.llm = get_qwen_model()
         self.embedding = get_embedding_model('qwen')
         self.workflow = None
@@ -148,7 +151,7 @@ class Graph:
         chain = prompt | self.llm | StrOutputParser()
         response = await chain.ainvoke({'query': query, 'conversation_context': conversation_context})
         # 检查是否需要检索
-        if response.strip() == "NEED_RETRIEVAL":
+        if response.strip().find("NEED_RETRIEVAL") > -1 or task_char.task_type == TaskType.FACT_RETRIEVAL:
             if thread_id and user_id:
                 await store.aput((user_id, thread_id,), key=f'need_retrieval_{int(time.time()*1000)}', value={'query':query,"result": True})
             return {
@@ -373,7 +376,7 @@ class Graph:
                 seen.add(normalized)
                 unique_docs.append(doc)
 
-        unique_docs = CrossEncoderRanker().reranker(state['original_query'], unique_docs)
+        unique_docs = CrossEncoderRanker().reranker(state['original_query'], unique_docs)[:self.config.max_use_doc]
 
         monitor_task_status("fusion_unique_docs", unique_docs)
         if unique_docs:
@@ -439,6 +442,8 @@ class Graph:
         4. 严格按照【检索到的信息】和【对话历史】中的内容回答，不要编造信息。
         5. 回答要连贯，符合对话上下文。
         6. 如果答案来自多个来源，进行总结和整合。
+        7. 回答要简短。
+        8. 不要提及【根据检索到的信息】。
         """
         system_msg = SYSTEM_PROMPT
         if self.task_adapter_handlers:
@@ -480,23 +485,3 @@ class Graph:
             await self.tools_pool.initialize()
         return self.workflow.with_config(callbacks=[langfuse_handler])
 
-
-if __name__ == '__main__':
-    async def test_main():
-        graph = await Graph().graph
-
-        # 测试用例1：需要检索的问题
-        inputs = {
-            "messages": [{"role": "user", "content": "什么是烯酮？"}],
-        }
-        user_id = "1"
-        config:RunnableConfig = {'configurable':{'thread_id':'1','user_id':user_id}}
-        print("=" * 50)
-        async for output in graph.astream(inputs,config=config):
-            for key, value in output.items():
-                print(f"Node '{key}':")
-                if "messages" in value:
-                    print(f"内容: {value['messages'][-1]}")
-                print("-" * 50)
-
-    async_run(test_main())

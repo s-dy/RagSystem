@@ -22,7 +22,7 @@ class DocumentGrader:
             if snapshot_dirs:
                 latest_snapshot = snapshot_dirs[0]
                 model_path = str(latest_snapshot)
-                print(f"使用本地模型路径: {model_path}")
+                # print(f"使用本地模型路径: {model_path}")
                 self.model = SentenceTransformer(model_path)
             else:
                 raise FileNotFoundError("未找到模型快照目录")
@@ -44,6 +44,13 @@ class DocumentGrader:
         similarity = util.pytorch_cos_sim(question_embedding,docs_embedding).item()
         monitor_task_status('doc score with question',similarity)
         return similarity >= self.threshold
+
+    def get_similarity(self,question: str, answer: str) -> float:
+        question_embedding = self.model.encode(question,convert_to_tensor=True)
+        docs_embedding = self.model.encode(answer,convert_to_tensor=True)
+        similarity = util.pytorch_cos_sim(question_embedding,docs_embedding).item()
+        return similarity
+
 
 if __name__ == '__main__':
     from dotenv import load_dotenv
