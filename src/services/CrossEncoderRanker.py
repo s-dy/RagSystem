@@ -9,7 +9,7 @@ class CrossEncoderRanker:
     """交叉编码器"""
     def __init__(self):
         # 加载预训练的交叉编码器模型
-        local_model_path = os.getenv('HOME')+os.getenv('HF_MODELS_PATH')+"/models--cross-encoder--ms-marco-MiniLM-L-6-v2/snapshots/"
+        local_model_path = os.getenv('HOME')+os.getenv('HF_MODELS_PATH')+"/models--BAAI--bge-reranker-v2-m3/snapshots/"
         # 获取最新的snapshot
         snapshots_dir = Path(local_model_path)
         if snapshots_dir.exists():
@@ -23,7 +23,7 @@ class CrossEncoderRanker:
             else:
                 raise FileNotFoundError("未找到模型快照目录")
         else:
-            self.model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+            self.model = CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512)
 
     def reranker(self,query:str,retrieved_docs:list[str]) -> list[tuple[str,float]]:
         # 生成查询-文档对
@@ -36,6 +36,7 @@ class CrossEncoderRanker:
         # print("重排序后结果:")
         # for i, (doc, score) in enumerate(reranked_docs):
         #     print(f"{i + 1}. [Score: {score:.4f}] {doc}")
+        reranked_docs = list(filter(lambda x: x[1] > 0.8, reranked_docs))
         return reranked_docs
 
 if __name__ == '__main__':

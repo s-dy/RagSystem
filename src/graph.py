@@ -1,17 +1,19 @@
 import os
 import re
 import time
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Optional, Literal, Dict
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import AIMessage, HumanMessage,AnyMessage
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.redis import AsyncRedisStore,BaseStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.checkpoint.redis import AsyncRedisSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import MessagesState, StateGraph, START, END
 
-from config.Config import QueryEnhancementConfig,REDIS_URI,RagSystemConfig
+from config.Config import QueryEnhancementConfig,REDIS_URI,RagSystemConfig,POSTGRESQL_URL
 from src.core.router.query_router import QueryRouter
 from src.core.shared.adapter import CommonTaskAdapterHandler
 from src.core.shared.query_enhancer import QueryEnhancer
@@ -22,11 +24,11 @@ from src.monitoring.langfuse_monitor import langfuse_handler
 from src.monitoring.logger import monitor_task_status
 from src.services.CrossEncoderRanker import CrossEncoderRanker
 from src.services.GradeModel import DocumentGrader
-from src.services.llm.models import get_qwen_model, get_embedding_model
+from src.services.llm.models import get_qwen_model, get_embedding_model, get_ollama_deepseek_model
 from src.services.relation_db import MySQLConnector
 from src.services.tools.ToolsPool import ToolsPool
 from src.services.tools.agent import ToolsAgent
-from utils.async_task import async_run
+from utils.message_util import get_last_user_msg, get_conversation_context
 
 
 class State(MessagesState):
@@ -36,38 +38,8 @@ class State(MessagesState):
     router_index: Optional[Dict[str, List[str]]] # 查询路由
     search_content: Optional[str]  # 检索内容整合
     run_count: int  # 运行次数
-
-
-def get_last_user_msg(messages: List[AnyMessage]):
-    user_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
-    if not user_messages:
-        return None
-    last_msg = user_messages[-1].content
-    monitor_task_status('last human message', last_msg)
-    return last_msg
-
-
-def get_conversation_context(messages: List[AnyMessage], num_messages: int = 3) -> str:
-    """获取对话上下文，用于多轮对话理解"""
-    if not messages:
-        return ""
-    
-    # 获取最近的几条消息作为上下文
-    recent_messages = messages[-num_messages:] if len(messages) >= num_messages else messages
-    context_parts = []
-    
-    for msg in recent_messages:
-        if isinstance(msg, HumanMessage):
-            role = "用户: "
-        elif isinstance(msg, AIMessage):
-            role = "助手: "
-        else:
-            role = "系统: "
-        context_parts.append(f"{role}{msg.content}")
-    
-    context = "\n".join(context_parts)
-    monitor_task_status('conversation context', context)
-    return context
+    answer: str
+    answer_quality: str
 
 
 class Graph:
@@ -77,12 +49,37 @@ class Graph:
         self.config = config
         self.llm = get_qwen_model()
         self.embedding = get_embedding_model('qwen')
-        self.workflow = None
+        # self.workflow:CompiledStateGraph = None
 
         # 任务适配器
         self.task_adapter_handlers = [CommonTaskAdapterHandler()]
+        # 交叉编码器重排序
+        self.cross_encoder_ranker = CrossEncoderRanker()
         # 工具池
         self.tools_pool = ToolsPool()
+
+    async def start(self,*args,**kwargs):
+        workflow = await self._init_graph()
+        # 初始化工具
+        if not self.tools_pool.init_instance:
+            await self.tools_pool.initialize()
+
+        if os.getenv('IS_LANGSMITH') == 'True':
+            # 使用LangSmith时
+            graph = workflow.compile().with_config(callbacks=[langfuse_handler])
+            response = await graph.ainvoke(*args, **kwargs)
+            return response
+        else:
+            # 普通使用时
+            # async with (AsyncRedisSaver.from_conn_string(REDIS_URI) as redis_checkpointer,AsyncRedisStore.from_conn_string(REDIS_URI) as redis_store):
+            #     graph = workflow.compile(checkpointer=redis_checkpointer,store=redis_store)
+            async with (AsyncPostgresSaver.from_conn_string(POSTGRESQL_URL) as post_checkpointer, AsyncPostgresStore.from_conn_string(POSTGRESQL_URL) as post_store):
+                await post_store.setup()
+                await post_checkpointer.setup()
+                graph = workflow.compile(checkpointer=post_checkpointer, store=post_store).with_config(
+                    callbacks=[langfuse_handler])
+                response = await graph.ainvoke(*args,**kwargs)
+                return response
 
     async def _init_graph(self):
         graph = StateGraph(State)
@@ -91,8 +88,8 @@ class Graph:
         graph.add_node('query_enhancer_and_route', self._query_enhancer_and_route)
         graph.add_node('fusion_retrieve', self._fusion_retrieve)
         graph.add_node('generate_response', self._generate_response)
-        # graph.add_node('grade_answer_quality',self._grade_answer_quality)
-        # graph.add_node('try_different_approach',self._try_different_approach)
+        graph.add_node('grade_answer_quality',self._grade_answer_quality)
+        graph.add_node('final',self._final)
 
         # 构建图结构
         graph.add_edge(START, 'retrieve_or_respond')
@@ -101,16 +98,11 @@ class Graph:
         graph.add_edge('query_enhancer_and_route', 'fusion_retrieve')
         graph.add_conditional_edges('fusion_retrieve', self._grade_documents,
                                     {'rewrite': 'query_enhancer_and_route', 'generate': 'generate_response'})
-        graph.add_edge('generate_response', END)
-        # graph.add_edge('generate_response', 'grade_answer_quality')
-        # graph.add_conditional_edges('grade_answer_quality', self._grade_answer_quality_conditional,{'good':END,'bad':'try_different_approach'})
-        # graph.add_conditional_edges('try_different_approach',self._try_different_approach_conditional,{'yes':'query_enhancer','no':END})
-
-        if os.getenv('IS_LANGSMITH') == 'True':
-            self.workflow = graph.compile()
-        else:
-            async with (AsyncRedisSaver.from_conn_string(REDIS_URI) as redis_checkpointer,AsyncRedisStore.from_conn_string(REDIS_URI) as redis_store):
-                self.workflow = graph.compile(checkpointer=redis_checkpointer,store=redis_store)
+        # graph.add_edge('generate_response', END)
+        graph.add_edge('generate_response', 'grade_answer_quality')
+        graph.add_conditional_edges('grade_answer_quality', self._grade_answer_quality_conditional,{'good':'final','bad':'query_enhancer_and_route'})
+        # self.workflow = graph
+        return graph
 
     async def _retrieve_or_respond(self, state: State,config:RunnableConfig,store:BaseStore) -> dict:
         """决定是使用检索工具搜索信息，还是直接回复用户"""
@@ -181,25 +173,21 @@ class Graph:
             'hyde_predict': False  # 假设文档生成
         }
 
+        # 根据任务类型和特征动态配置
+        task_type = task_char.task_type
         # 重试时的降级策略（避免过度增强导致噪声）
         if run_count > 1:
             # 仅保留最核心的增强方式
-            if task_char.task_type == TaskType.ANALYTICAL_COMPARISON:
-                config['enable_query_decomposition'] = True  # 分解仍是关键
-            elif task_char.requires_real_time_data:
+            if task_type == TaskType.ANALYTICAL_COMPARISON:
+                config['enable_query_decomposition'] = True
+            elif task_type == TaskType.REAL_TIME_INTERACTION:
                 config['hyde_predict'] = True  # 实时数据仍需假设
             return QueryEnhancementConfig(**config)
-
-        # 根据任务类型和特征动态配置
-        task_type = task_char.task_type
 
         if task_type == TaskType.ANALYTICAL_COMPARISON:
             # 分析对比：必须分解 + 扩展维度
             config['enable_query_decomposition'] = True
             config['expand'] = True
-            # 如果比较对象多，加强同义改写
-            if task_char.comparison_count >= 2:
-                config['paraphrase'] = True
 
         elif task_type == TaskType.PROCEDURAL_QUERY:
             # 流程查询：扩展步骤细节
@@ -209,9 +197,6 @@ class Graph:
         elif task_type == TaskType.FACT_RETRIEVAL:
             # 事实检索：同义改写提高召回率
             config['paraphrase'] = True
-            # 如果有数值或实体，加强扩展
-            if task_char.numeric_values or task_char.entities:
-                config['expand'] = True
 
         elif task_type == TaskType.COMPLEX_PLANNING:
             # 复杂规划：需要分解 + 扩展
@@ -222,12 +207,12 @@ class Graph:
         elif task_type == TaskType.MULTI_STEP_EXECUTION:
             # 多步骤执行：必须分解
             config['enable_query_decomposition'] = True
-            if task_char.steps_required > 3:
-                config['expand'] = True  # 步骤多时扩展细节
+            config['expand'] = True
 
         elif task_type == TaskType.REAL_TIME_INTERACTION:
             # 实时交互：HyDE 预测 + 同义改写
             config['hyde_predict'] = True
+            config['paraphrase'] = True
 
         elif task_type == TaskType.VALIDATION_VERIFICATION:
             # 验证核查：精确匹配优先，少用扩展
@@ -273,7 +258,7 @@ class Graph:
             await store.aput((user_id, thread_id,), key=f'query_enhancer_{int(time.time()*1000)}',
                 value={
                     "enhanced_queries": enhanced_queries,
-                    "enhancer_config": enhancer_config
+                    "enhancer_config": enhancer_config.__dict__
                 },
             )
 
@@ -376,18 +361,18 @@ class Graph:
                 seen.add(normalized)
                 unique_docs.append(doc)
 
-        unique_docs = CrossEncoderRanker().reranker(state['original_query'], unique_docs)[:self.config.max_use_doc]
+        unique_docs = self.cross_encoder_ranker.reranker(state['original_query'], unique_docs)
 
         monitor_task_status("fusion_unique_docs", unique_docs)
         if unique_docs:
+            content = "\n\n".join([doc for doc,score in unique_docs])
             thread_id = config['configurable'].get('thread_id', 'default')
             user_id = config['configurable'].get('user_id', 'default')
             if thread_id and user_id:
                 await store.aput((user_id, thread_id,),key=f"final_retrieval_{int(time.time()*1000)}",value={
                     "unique_docs_count": len(unique_docs),
-                    "docs": unique_docs
+                    "docs": [f"score:{str(score)}\n" + doc for doc,score in unique_docs]
                 })
-            content = "\n\n".join([doc for doc,score in unique_docs])
             return {
                 'search_content': content
             }
@@ -464,7 +449,7 @@ class Graph:
 
         # 调用模型生成响应
         response = await chain.ainvoke({'query': question, 'content': docs_content, 'conversation_context': conversation_context})
-
+        monitor_task_status('generating response',response)
         thread_id = config['configurable'].get('thread_id', 'default')
         user_id = config['configurable'].get('user_id', 'default')
         if thread_id and user_id:
@@ -475,13 +460,44 @@ class Graph:
                 "conversation_context": conversation_context
             })
 
-        return {"messages": [AIMessage(content=response)]}
+        # return {"messages": [AIMessage(content=response)]}
+        return {"answer": response}
 
-    @property
-    async def graph(self):
-        if self.workflow is None:
-            await self._init_graph()
-        if not self.tools_pool.init_instance:
-            await self.tools_pool.initialize()
-        return self.workflow.with_config(callbacks=[langfuse_handler])
+    async def _grade_answer_quality(self,state: State,config:RunnableConfig,store:BaseStore):
+        """回答评分节点"""
+        if state['run_count'] >= 2:
+            return {'answer_quality':'good'}
+        question = state['original_query']
+        answer = state['answer']
+        prompt = ChatPromptTemplate.from_template(
+            """你是一个评分者，需要根据用户问题来评估回答的准确性。
+            
+            问题：{question}
+            
+            回答：{answer}
+            
+            1. 如果回答准确，返回【good】，如果回答不准确，返回 bad
+            2. 如果回答包含 “无法回答该问题”，直接返回 good
+            
+            只返回 good 和 bad。不需要返回其他任何内容。
+            """
+        )
+        chain = prompt | self.llm | StrOutputParser()
+        response = await chain.ainvoke({'question': question, 'answer': answer})
+        monitor_task_status('answer quality grade',response)
+        thread_id = config['configurable'].get('thread_id', 'default')
+        user_id = config['configurable'].get('user_id', 'default')
+        if thread_id and user_id:
+            await store.aput((user_id, thread_id,), key=f"grade_answer_quality_{int(time.time() * 1000)}", value={'query':question,'answer':answer,'response': response})
 
+        return {'answer_quality': response}
+
+    def _grade_answer_quality_conditional(self,state:State) -> Literal['good', 'bad']:
+        answer_quality = state['answer_quality']
+        if answer_quality == 'bad':
+            return 'bad'
+        else:
+            return 'good'
+
+    def _final(self,state:State,config:RunnableConfig,store:BaseStore):
+        return {'messages':[AIMessage(content=state['answer'])]}

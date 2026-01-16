@@ -13,3 +13,4 @@ wheels/
 .langgraph_api/
 src/crawler/data/
 docs/
+logs/

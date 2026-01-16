@@ -23,18 +23,11 @@ class TaskCharacteristics:
     # 基础特征
     task_type: TaskType = TaskType.FACT_RETRIEVAL
 
-    # 语义特征
-    entities: List[str] = field(default_factory=list)  # 提取的实体列表（如人名、地名、机构名等）
-
     # 执行特征
-    steps_required: int = 1
     requires_external_tools: bool = False  # 是否需要调用外部工具/API
-    requires_real_time_data: bool = False # 实时数据需求
 
     # 结构特征
-    comparison_count: int = 0  # 比较关系的数量（如"A和B哪个更好"）
     action_verbs: List[str] = field(default_factory=list)  # 动作动词列表（如"计算"、"比较"等）
-    numeric_values: List[float] = field(default_factory=list)  # 数值列表（用于量化查询）
 
     def __repr__(self) -> str:
         # 格式化列表（中文友好）
@@ -60,13 +53,8 @@ class TaskCharacteristics:
         return (
             f"【任务特征分析结果】\n"
             f"- 任务类型：{type_names.get(self.task_type, self.task_type.value)}\n"
-            f"- 涉及实体：{fmt_list(self.entities)}\n"
             f"- 动作动词：{fmt_list(self.action_verbs)}\n"
-            f"- 数值参数：{fmt_list([f'{v:g}' for v in self.numeric_values])}\n"
-            f"- 比较对象数量：{self.comparison_count}\n"
-            f"- 所需步骤数：{self.steps_required}\n"
             f"- 需要外部工具：{'是' if self.requires_external_tools else '否'}\n"
-            f"- 需要实时数据：{'是' if self.requires_real_time_data else '否'}"
         )
 
 
@@ -130,11 +118,6 @@ class TaskAnalyzer:
                 re.compile(pattern, re.IGNORECASE) for pattern in patterns
             ]
 
-        # 实体提取模式
-        self.entity_patterns = {
-            "money": r'[¥$€]\d+(?:\.\d+)?|\d+(?:\.\d+)?[元美元欧元]',
-        }
-
     def analyze_task(self, query: str) -> TaskCharacteristics:
         """分析任务特征"""
         query_lower = query.lower()
@@ -144,10 +127,7 @@ class TaskAnalyzer:
         primary_task_type = max(task_type_scores.items(), key=lambda x: x[1])[0]
 
         # 2. 提取基础特征
-        entities = self.extract_entities(query)
         action_verbs = self._extract_action_verbs(query_lower)
-        numeric_values = self._extract_numeric_values(query)
-        comparison_count = self._count_comparisons(query_lower)
 
         # 3. 分析执行特征
         execution_features = self._analyze_execution_features(
@@ -157,10 +137,7 @@ class TaskAnalyzer:
         # 4. 组合所有特征
         characteristics = TaskCharacteristics(
             task_type=primary_task_type,
-            entities=entities,
             action_verbs=action_verbs,
-            numeric_values=numeric_values,
-            comparison_count=comparison_count,
             **execution_features
         )
 
@@ -194,33 +171,6 @@ class TaskAnalyzer:
                     verbs.add(keyword)
         return sorted(list(verbs))
 
-    def _extract_numeric_values(self, query: str) -> List[float]:
-        """提取数值"""
-        numbers = []
-        # 匹配数字（包括带单位的）
-        number_pattern = r'(\d+(?:\.\d+)?)(?:[万亿%]?)'
-        matches = re.findall(number_pattern, query)
-        for match in matches:
-            try:
-                numbers.append(float(match))
-            except ValueError:
-                continue
-        return numbers
-
-    def _count_comparisons(self, query: str) -> int:
-        """计算比较关系数量"""
-        # 检测 "A和B"、"X与Y" 等结构
-        comparison_patterns = [
-            r'.*[和与跟].*',
-            r'(?:对比|比较|对照)',
-            r'(?:vs|VS| versus )'
-        ]
-        count = 0
-        for pattern in comparison_patterns:
-            if re.search(pattern, query, re.IGNORECASE):
-                count += 1
-        return count
-
     def _analyze_execution_features(
             self,
             query: str,
@@ -229,18 +179,8 @@ class TaskAnalyzer:
     ) -> Dict[str, Any]:
         """分析执行特征"""
         features = {
-            "steps_required": 1,
             "requires_external_tools": False,
-            "requires_real_time_data": False
         }
-
-        # 步骤数量判断
-        step_indicators = ["首先", "然后", "接着", "最后", "第一步", "第二步", "分步", "多步", "逐步"]
-        step_count = sum(1 for indicator in step_indicators if indicator in query)
-        if step_count > 0:
-            features["steps_required"] = min(step_count + 1, 10)
-        elif task_type in [TaskType.MULTI_STEP_EXECUTION, TaskType.COMPLEX_PLANNING]:
-            features["steps_required"] = 3  # 默认多步骤
 
         # 外部工具需求
         tool_categories = ["计算", "搜索", "分析", "生成", "验证"]
@@ -248,65 +188,7 @@ class TaskAnalyzer:
                [v for cat in tool_categories for v in self.action_verbs_keywords[cat]]):
             features["requires_external_tools"] = True
 
-        # 实时数据需求
-        if task_type == TaskType.REAL_TIME_INTERACTION:
-            features["requires_real_time_data"] = True
-
         return features
-
-    def extract_entities(self, query: str) -> List[str]:
-        """提取命名实体"""
-        entities = []
-        for entity_type, pattern in self.entity_patterns.items():
-            try:
-                matches = re.findall(pattern, query)
-                for match in matches:
-                    if isinstance(match, tuple):
-                        match = match[0] if match else ""
-                    if match and len(str(match)) > 1:  # 过滤单字符
-                        entities.append(f"{entity_type}:{match}")
-            except re.error:
-                continue
-        return list(set(entities))  # 去重
-
-    async def analyze_task_with_context(self, query: str, conversation_context: str = "", user_id: str = "default") -> TaskCharacteristics:
-        """分析任务特征（考虑对话上下文和用户历史）"""
-        query_lower = query.lower()
-
-        # 1. 识别任务类型
-        task_type_scores = self._identify_task_type(query_lower)
-        primary_task_type = max(task_type_scores.items(), key=lambda x: x[1])[0]
-
-        # 2. 提取基础特征
-        entities = self.extract_entities(query)
-        action_verbs = self._extract_action_verbs(query_lower)
-        numeric_values = self._extract_numeric_values(query)
-        comparison_count = self._count_comparisons(query_lower)
-
-        # 3. 分析执行特征
-        execution_features = self._analyze_execution_features(
-            query_lower, primary_task_type, action_verbs
-        )
-        
-        # 4. 基于对话上下文和用户历史调整特征
-        contextual_adjustments = await self._apply_contextual_adjustments(
-            query, conversation_context, user_id, primary_task_type
-        )
-        
-        # 5. 合并特征
-        execution_features.update(contextual_adjustments)
-
-        # 6. 组合所有特征
-        characteristics = TaskCharacteristics(
-            task_type=primary_task_type,
-            entities=entities,
-            action_verbs=action_verbs,
-            numeric_values=numeric_values,
-            comparison_count=comparison_count,
-            **execution_features
-        )
-
-        return characteristics
 
 if __name__ == '__main__':
     analyzer = TaskAnalyzer()
