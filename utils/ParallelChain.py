@@ -46,6 +46,8 @@ class ParallelChain:
             raise ValueError('不支持的模版创建方式')
         if config and isinstance(config, dict):
             chain_model = chain_model | self.llm_client.with_config(configurable=config)
+        else:
+            chain_model = chain_model | self.llm_client
         if parse == 'json':
             chain_model = chain_model | JsonOutputParser()
         elif parse == 'str':

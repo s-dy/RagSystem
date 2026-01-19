@@ -1,6 +1,6 @@
 from typing import Callable
 
-from src.core.shared.chunk import ChunkHandler
+from src.node.chunk.chunk import ChunkHandler
 from src.monitoring.logger import monitor_task_status
 from src.services.llm.models import get_embedding_model
 from src.services.vector_db.client import MilvusExecutor, MilvusConfig

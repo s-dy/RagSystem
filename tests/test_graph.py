@@ -24,13 +24,13 @@ langfuse = get_client()
 
 
 async def test_graph():
-    data = get_data(60)
+    data = get_data(1)
     for idx, item in enumerate(data, 1):
         monitor_task_status(f"【{idx}】Start" + '=' * 50)
         user_id = str(random.randint(1, 10000))
         config: RunnableConfig = {'configurable': {'thread_id': str(uuid.uuid4()), 'user_id': user_id},'recursion_limit':15}
         monitor_task_status(
-            f'开始测试 ==> user_id={config["configurable"]["user_id"]} ==> thread_id={config["configurable"]["thread_id"]}')
+            f'开始单跳测试 ==> user_id={config["configurable"]["user_id"]} ==> thread_id={config["configurable"]["thread_id"]}')
         for question_answer in item['qas']:
             question = question_answer['question']
             answers = question_answer['answer']
@@ -38,6 +38,32 @@ async def test_graph():
                 "messages": [{"role": "user", "content": question}],
             }
             await invoke(inputs, config, answers)
+
+
+async def test_multi_graph():
+    data = get_data(1)
+    for idx, item in enumerate(data, 1):
+        monitor_task_status(f"【{idx}】Start" + '=' * 50)
+        user_id = str(random.randint(1, 10000))
+        config: RunnableConfig = {'configurable': {'thread_id': str(uuid.uuid4()), 'user_id': user_id},'recursion_limit':25}
+        monitor_task_status(
+            f'开始多跳测试 ==> user_id={config["configurable"]["user_id"]} ==> thread_id={config["configurable"]["thread_id"]}')
+
+        content,ans = '',''
+        for question_answer in item['qas']:
+            question = question_answer['question']
+            answers = question_answer['answer']
+            content += question
+            ans = ans + '\n' + answers
+        inputs = {
+            "messages": [{"role": "user", "content": '李呈瑞于哪一年参加红军？他获得过哪些勋章？他于哪一年逝世？他在抗战中担任过哪些职位？'}],
+        }
+        await invoke(inputs, config, ans)
+
+
+def get_similarity(llm_answer,answer) -> float:
+    calculate = len(set(llm_answer) & set(answer)) / len(answer)
+    return calculate
 
 # 初始化评估器
 doc_grader = DocumentGrader(threshold=0.7)
@@ -68,8 +94,8 @@ async def invoke(inputs, config, answers: str):
             # similarity = doc_grader.get_similarity(question, llm_answer)
 
             # 计算与期望答案的相似度
-            expected_similarity = doc_grader.get_similarity(llm_answer, answers)
-
+            # expected_similarity = doc_grader.get_similarity(llm_answer, answers)
+            expected_similarity = get_similarity(llm_answer, answers)
             # 二值化分类（基于阈值）
             # is_relevant_pred = similarity >= doc_grader.threshold
             # is_relevant_true = expected_similarity >= 0.5

@@ -3,7 +3,7 @@ import re
 from langchain.chat_models import BaseChatModel
 from langchain_core.runnables import RunnableSerializable
 
-from src.core.shared.time_transforme import TimeParseTool
+from src.services.time_transforme import TimeParseTool
 from src.monitoring.logger import monitor_task_status
 from config.Config import QueryEnhancementConfig
 from utils.ParallelChain import ParallelChain
@@ -44,6 +44,9 @@ class QueryEnhancer(ParallelChain):
 
         if self.config.hyde_predict and (task := self._predict_query_with_context(query,conversation_context)):
             self.task_map['predict'] = task
+
+        if self.config.decompose_to_subquestions and (task := self.decompose_to_subquestions_chain(query)):
+            self.task_map['decompose_to_subquestions'] = task
 
         # 并行执行所有增强任务
         responses = await self.runnable_parallel({'query': query,'conversation_context': conversation_context})
@@ -159,6 +162,17 @@ class QueryEnhancer(ParallelChain):
         """
         return self.create_chain(prompt,parse='json',config={"llm_temperature": 0.2})
 
+    def decompose_to_subquestions_chain(self,query: str) -> RunnableSerializable:
+        prompt = """
+        将以下复杂问题分解为一系列按顺序执行的子问题。每个子问题应能独立回答，且后续问题可引用前序答案。
+
+        问题：{query}
+
+        输出格式（严格按 JSON 列表）：
+        ["子问题1", "子问题2", ...]
+        """
+        return self.create_chain(prompt,parse='json')
+
     def _deduplicate_queries(self, queries: List[str]) -> List[str]:
         """去重查询"""
         seen = set()
@@ -186,7 +200,7 @@ class QueryEnhancer(ParallelChain):
 
 if __name__ == '__main__':
     from utils.async_task import async_run
-    from src.services.llm.models import get_ollama_deepseek_model,get_qwen_model
+    from src.services.llm.models import get_qwen_model
     model = get_qwen_model()
-    query_enhancer = QueryEnhancer(model)
-    async_run(query_enhancer.enhance('对比兔子警官和最美护士',{"user_expertise_level":"expert"}))
+    query_enhancer = QueryEnhancer(model,QueryEnhancementConfig(paraphrase=False,expand=False,enable_query_decomposition=False,hyde_predict=False,decompose_to_subquestions=True))
+    async_run(query_enhancer.enhance('A 的 CEO 是谁？他在哪所大学获得博士学位？',{"user_expertise_level":"expert"}))

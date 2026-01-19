@@ -5,6 +5,7 @@ import json
 from typing import List, Dict
 
 from src.monitoring.logger import monitor_task_status
+from utils.decortor import singleton
 
 
 @dataclass
@@ -17,6 +18,7 @@ class MySQLConfig:
     charset:str = "utf8mb4"
     autocommit:bool = True
 
+@singleton
 class MySQLConnector:
     def __init__(self, config: MySQLConfig=None):
         if config is None:

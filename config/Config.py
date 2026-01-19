@@ -13,11 +13,13 @@ class QueryEnhancementConfig:
     # 基于专业水平改写
     formalize:bool = False
     # 扩展改写,扩展比较维度、步骤细节
-    expand:bool = True
+    expand:bool = False
     # 查询分解
-    enable_query_decomposition: bool = True
+    enable_query_decomposition: bool = False
     # HyDE predict 生成假设答案辅助检索
-    hyde_predict:bool = True
+    hyde_predict:bool = False
+    # 分解多步子问题
+    decompose_to_subquestions: bool = False
 
     # 性能限制
     max_enhanced_queries: int = 8
