@@ -163,7 +163,7 @@ class Graph:
         # 情况1：需要分解多跳问题（sub_questions 为空列表）
         if not state["sub_questions"]:
             monitor_task_status("---DECOMPOSING MULTI-HOP QUESTION---")
-            enhancer_config = QueryEnhancementConfig(decompose_to_subquestions=True)
+            enhancer_config = QueryEnhancementConfig(enable_query_decomposition=True)
             enhancer = QueryEnhancer(self.llm, enhancer_config)
             query = state["original_query"]
             conversation_context = get_conversation_context(state["messages"], num_messages=5)

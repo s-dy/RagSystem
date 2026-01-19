@@ -28,7 +28,7 @@ async def test_graph():
     for idx, item in enumerate(data, 1):
         monitor_task_status(f"【{idx}】Start" + '=' * 50)
         user_id = str(random.randint(1, 10000))
-        config: RunnableConfig = {'configurable': {'thread_id': str(uuid.uuid4()), 'user_id': user_id},'recursion_limit':15}
+        config: RunnableConfig = {'configurable': {'thread_id': str(uuid.uuid4()), 'user_id': user_id},'recursion_limit':25}
         monitor_task_status(
             f'开始单跳测试 ==> user_id={config["configurable"]["user_id"]} ==> thread_id={config["configurable"]["thread_id"]}')
         for question_answer in item['qas']:
@@ -56,7 +56,7 @@ async def test_multi_graph():
             content += question
             ans = ans + '\n' + answers
         inputs = {
-            "messages": [{"role": "user", "content": '李呈瑞于哪一年参加红军？他获得过哪些勋章？他于哪一年逝世？他在抗战中担任过哪些职位？'}],
+            "messages": [{"role": "user", "content": '小行星8990、小行星8991和小行星8992分别被命名为什么？'}],
         }
         await invoke(inputs, config, ans)
 
@@ -131,4 +131,4 @@ def evaluate_score(span, evaluate_data):
 
 
 if __name__ == '__main__':
-    async_run(test_graph())
+    async_run(test_multi_graph())
