@@ -6,7 +6,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from config.Config import MCP_SERVER
 from src.monitoring.logger import monitor_task_status
 from utils.async_task import async_run
-from utils.decortor import singleton
+from utils.decorator import singleton
 
 
 @singleton

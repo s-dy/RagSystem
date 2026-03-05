@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime
 
-from src.services.time_transforme import EnhancedTimeParser, TimeParseTool
+from src.services.time_transformer import EnhancedTimeParser, TimeParseTool
 
 
 class TestEnhancedTimeParser(unittest.TestCase):

@@ -1,9 +1,8 @@
 import asyncio
-from typing import List, Tuple, Any
+from typing import List, Tuple
 
 from src.monitoring.logger import monitor_task_status
-from src.services.postgres_connector import PostgreSQLConnector
-from src.services.vector_db.client import MilvusExecutor, MilvusConfig
+from src.services.storage import PostgreSQLConnector, MilvusExecutor, MilvusConfig
 
 
 class FusionRetrieve:

@@ -9,11 +9,17 @@ from sentence_transformers import SentenceTransformer, util
 
 class DocumentGrader:
     """评估文档相关性"""
-    def __init__(self,threshold:float=0.7):
+    def __init__(self, threshold: float = 0.7):
         """
         :param threshold:  相关性阈值
         """
-        local_model_path = os.getenv('HOME')+os.getenv('HF_MODELS_PATH')+"/models--BAAI--bge-large-zh-v1.5/snapshots/"
+        home_dir = os.getenv('HOME', '')
+        hf_models_path = os.getenv('HF_MODELS_PATH', '')
+        if not home_dir or not hf_models_path:
+            self.model = SentenceTransformer('BAAI/bge-large-zh-v1.5')
+            self.threshold = threshold
+            return
+        local_model_path = home_dir + hf_models_path + "/models--BAAI--bge-large-zh-v1.5/snapshots/"
         # 获取最新的snapshot
         snapshots_dir = Path(local_model_path)
         if snapshots_dir.exists():

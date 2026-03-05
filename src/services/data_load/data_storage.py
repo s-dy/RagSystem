@@ -1,9 +1,9 @@
-from src.node.chunk.chunk import ChunkHandler
 from src.monitoring.logger import monitor_task_status
 from src.services.llm.models import get_embedding_model
-from src.services.postgres_connector import PostgreSQLConnector
-from src.services.vector_db.client import MilvusExecutor, MilvusConfig
-from utils.file_tool import load_document
+from src.services.storage import MilvusExecutor, MilvusConfig, PostgreSQLConnector
+
+from .file_tool import load_document
+from .chunk import ChunkHandler
 
 
 class DataDBStorage:

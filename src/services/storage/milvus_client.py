@@ -36,19 +36,3 @@ class MilvusExecutor:
     @property
     def client(self) -> Milvus:
         return self.vector_store
-
-if __name__ == '__main__':
-    # 验证函数
-    async def verify_milvus_setup():
-        # 创建配置
-        config = MilvusConfig(
-            collection_name="hybridRag_news",
-        )
-        # 初始化客户端
-        client = MilvusExecutor(config).client
-        print(client.similarity_search_with_score('茅台的新闻', k=4, ranker_type="rrf", ranker_params={"k": 100}))
-
-
-    import asyncio
-
-    asyncio.run(verify_milvus_setup())

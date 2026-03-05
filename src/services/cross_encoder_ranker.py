@@ -9,7 +9,12 @@ class CrossEncoderRanker:
     """交叉编码器"""
     def __init__(self):
         # 加载预训练的交叉编码器模型
-        local_model_path = os.getenv('HOME')+os.getenv('HF_MODELS_PATH')+"/models--BAAI--bge-reranker-v2-m3/snapshots/"
+        home_dir = os.getenv('HOME', '')
+        hf_models_path = os.getenv('HF_MODELS_PATH', '')
+        if not home_dir or not hf_models_path:
+            self.model = CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512)
+            return
+        local_model_path = home_dir + hf_models_path + "/models--BAAI--bge-reranker-v2-m3/snapshots/"
         # 获取最新的snapshot
         snapshots_dir = Path(local_model_path)
         if snapshots_dir.exists():
