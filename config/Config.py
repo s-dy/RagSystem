@@ -1,9 +1,16 @@
 from dataclasses import dataclass, field
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 @dataclass
 class RagSystemConfig:
-    ...
+    # 是否开启 RAG 评估（基于 ragas 指标）
+    enable_eval: bool = False
+    # 是否启用父子文档检索策略（子文档检索 → 父文档回溯）
+    enable_parent_child_retrieval: bool = False
 
 @dataclass
 class QueryEnhancementConfig:
@@ -25,23 +32,32 @@ class QueryEnhancementConfig:
 
 @dataclass
 class MilvusConfig:
-    collection_name: str = "default"
-    host: str = "localhost"
-    port: int = 19530
-    db_name: str = "hybridRagSystem"
-    token: str = "root:Milvus"
+    collection_name: str = os.getenv("MILVUS_COLLECTION_NAME", "default")
+    host: str = os.getenv("MILVUS_HOST", "localhost")
+    port: int = int(os.getenv("MILVUS_PORT", "19530"))
+    db_name: str = os.getenv("MILVUS_DB_NAME", "hybridRagSystem")
+    token: str = os.getenv("MILVUS_TOKEN", "root:Milvus")
+
+@dataclass
+class PostgreSQLConfig:
+    host: str = os.getenv("POSTGRES_HOST", "localhost")
+    port: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    user: str = os.getenv("POSTGRES_USER", "postgres")
+    password: str = os.getenv("POSTGRES_PASSWORD", "")
+    dbname: str = os.getenv("POSTGRES_DBNAME", "hybridragsystem")
+    autocommit: bool = True
 
 
-REDIS_URI = "redis://localhost:6379"
+REDIS_URI = os.getenv("REDIS_URI", "redis://localhost:6379")
 os.environ['REDIS_URL'] = REDIS_URI
 
-POSTGRESQL_URL = "postgresql://postgres:123456@localhost:5432"
-os.environ['POSTGRESQL_URL'] = REDIS_URI
+POSTGRESQL_URL = f"postgresql://{PostgreSQLConfig.user}:{PostgreSQLConfig.password}@{PostgreSQLConfig.host}:{PostgreSQLConfig.port}"
+os.environ['POSTGRESQL_URL'] = POSTGRESQL_URL
 
 # MCP服务
 MCP_SERVER = {
     "bing_search": {
         "transport": "http",
-        "url": "http://localhost:8080/mcp",
+        "url": os.getenv("MCP_BING_SEARCH_URL", "http://localhost:8080/mcp"),
     }
 }
