@@ -1,0 +1,329 @@
+/* ═══════════════════════════════════════════════════════════
+   layout.css — 应用布局、侧边栏、导航、页面容器
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── 应用容器 ─── */
+#app {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+    position: relative;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   侧边栏（可收缩）
+   ═══════════════════════════════════════════════════════════ */
+.sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    transition: width var(--transition), min-width var(--transition), opacity var(--transition), transform var(--transition);
+    z-index: 100;
+    overflow: hidden;
+}
+
+.sidebar.collapsed {
+    width: 0;
+    min-width: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* 侧边栏顶部 */
+.sidebar-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px var(--space-md) var(--space-sm);
+    flex-shrink: 0;
+}
+
+.sidebar-logo {
+    font-size: var(--font-lg);
+    font-weight: var(--font-bold);
+    color: var(--text-primary);
+    letter-spacing: -0.3px;
+}
+
+.sidebar-toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.sidebar-toggle-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* 新建对话按钮 */
+.sidebar-new-chat-wrapper {
+    padding: var(--space-xs) var(--space-md) var(--space-md);
+    flex-shrink: 0;
+}
+
+.sidebar-new-chat-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px 0;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--font-base);
+    font-weight: var(--font-medium);
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.sidebar-new-chat-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
+}
+
+/* 侧边栏收起后的展开按钮 */
+.sidebar-expand-btn {
+    position: fixed;
+    top: var(--space-md);
+    left: var(--space-md);
+    z-index: 101;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    box-shadow: var(--shadow-sm);
+}
+
+.sidebar-expand-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* 导航 */
+.sidebar-nav {
+    padding: var(--space-xs) var(--space-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px var(--space-md);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-base);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    width: 100%;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.nav-item.active {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    font-weight: var(--font-medium);
+}
+
+.nav-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 会话列表 */
+.conversation-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-xs) var(--space-sm);
+    display: flex;
+    flex-direction: column;
+}
+
+.conversation-items {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.conversation-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    color: var(--text-secondary);
+    font-size: 13px;
+    border: none;
+    background: transparent;
+    width: 100%;
+    text-align: left;
+}
+
+.conversation-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.conversation-item.active {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.conversation-item-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conversation-item-delete {
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: var(--space-2xs) var(--space-xs);
+    border-radius: var(--radius-xs);
+    transition: all var(--transition);
+    flex-shrink: 0;
+}
+
+.conversation-item:hover .conversation-item-delete {
+    opacity: 1;
+}
+
+.conversation-item-delete:hover {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* 侧边栏底部 */
+.sidebar-footer {
+    padding: var(--space-sm);
+    flex-shrink: 0;
+}
+
+.sidebar-footer-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px var(--space-md);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-base);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    width: 100%;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.sidebar-footer-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   主内容区
+   ═══════════════════════════════════════════════════════════ */
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg-primary);
+}
+
+.page-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.page {
+    display: none;
+    height: 100%;
+    flex-direction: column;
+}
+
+.page.active {
+    display: flex;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   侧边栏遮罩 & 移动端适配
+   ═══════════════════════════════════════════════════════════ */
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        transform: translateX(-100%);
+        z-index: 100;
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+        width: var(--sidebar-width);
+        min-width: var(--sidebar-width);
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .sidebar.open ~ .sidebar-overlay {
+        display: block;
+    }
+
+    .sidebar-expand-btn {
+        display: flex !important;
+    }
+
+    /* 侧边栏展开时隐藏展开按钮，避免两个按钮同时显示 */
+    .sidebar.open ~ .sidebar-expand-btn {
+        display: none !important;
+    }
+}
