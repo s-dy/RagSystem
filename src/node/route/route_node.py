@@ -8,7 +8,6 @@
 """
 
 import asyncio
-import time
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
@@ -46,6 +45,7 @@ class RouteNodeMixin:
         if not is_need_retrieval:
             # LLM 已直接生成回复内容，存入 answer
             return {
+                'original_query': query,
                 'need_retrieval': False,
                 'answer': response,
             }
@@ -57,11 +57,7 @@ class RouteNodeMixin:
             # 单跳：直接作为一步多跳
             sub_questions = [query]
 
-        thread_id = config['configurable'].get('thread_id', 'default')
-        user_id = config['configurable'].get('user_id', 'default')
-        if store and thread_id and user_id:
-            await store.aput((user_id, thread_id,), key=f'need_retrieval_{int(time.time() * 1000)}',
-                             value={'query': query, "result": True})
+        monitor_task_status("need_retrieval", {"query": query, "result": True})
 
         return {
             'original_query': query,
@@ -145,14 +141,10 @@ class RouteNodeMixin:
         if not enhanced_result:
             enhanced_result = enhancer.parse_query_time([query])
 
-        thread_id = config['configurable'].get('thread_id', 'default')
-        user_id = config['configurable'].get('user_id', 'default')
-        if store and thread_id and user_id:
-            await store.aput((user_id, thread_id,), key=f'query_enhancer_{int(time.time() * 1000)}',
-                             value={
-                                 "enhanced_queries": enhanced_result,
-                                 "enhancer_config": enhancer_config.__dict__,
-                             })
+        monitor_task_status("query_enhancer", {
+            "enhanced_queries": enhanced_result,
+            "enhancer_config": enhancer_config.__dict__,
+        })
 
         # 查询路由
         monitor_task_status("---QUERY ROUTING---")

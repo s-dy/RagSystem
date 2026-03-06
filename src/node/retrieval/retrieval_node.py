@@ -9,7 +9,6 @@
 
 import asyncio
 import re
-import time
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -184,13 +183,10 @@ class RetrievalNodeMixin:
             retrieved_docs_text = []
             ordered_docs = []
 
-        thread_id = config['configurable'].get('thread_id', 'default')
-        user_id = config['configurable'].get('user_id', 'default')
-        if store and thread_id and user_id:
-            await store.aput((user_id, thread_id,), key=f"final_retrieval_{int(time.time() * 1000)}", value={
-                "unique_docs_count": len(unique_retrieved),
-                "docs": [f"score:{score:.4f} source:{d.source}\n{d.content}" for d, score in zip(ordered_docs, rerank_scores)] if rerank_scores else []
-            })
+        monitor_task_status("final_retrieval", {
+            "unique_docs_count": len(unique_retrieved),
+            "reranked_count": len(ordered_docs),
+        })
 
         return {
             'search_content': content,

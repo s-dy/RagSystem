@@ -1,17 +1,15 @@
-"""内存管理器 - 用于管理用户个性化记忆、对话历史和上下文记忆"""
-
-import json
+import logging
 import time
-from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union
-from langgraph.store.base import BaseStore
-from langgraph.store.redis import AsyncRedisStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryManager:
     """内存管理器，用于处理用户个性化记忆、对话历史和上下文记忆"""
     
-    def __init__(self, store: BaseStore = None):
+    def __init__(self, store: AsyncPostgresStore = None):
         self.store = store
         
     async def save_user_preference(self, user_id: str, preference_key: str, preference_value: Any, ttl: int = 86400 * 30):
@@ -38,7 +36,8 @@ class MemoryManager:
             if result and isinstance(result, dict):
                 return result.get("value", default_value)
             return default_value
-        except:
+        except Exception as exc:
+            logger.warning("Failed to get user preference [%s:%s]: %s", user_id, preference_key, exc)
             return default_value
     
     async def save_conversation_memory(self, user_id: str, thread_id: str, memory_type: str, content: Any, ttl: int = 86400 * 7):
@@ -61,9 +60,14 @@ class MemoryManager:
         if not self.store:
             return []
             
-        # 注意：由于RedisStore的限制，这里简化实现
-        # 在实际应用中，可能需要更复杂的键管理和查询逻辑
-        return []
+        prefix = f"conversation:{user_id}:{thread_id}:{memory_type}:"
+        items = await self.store.asearch(("memory",), filter={"prefix": prefix}, limit=100)
+        results = [
+            item.value for item in items
+            if item.value and isinstance(item.value, dict)
+        ]
+        results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        return results[:limit]
     
     async def save_contextual_memory(self, user_id: str, context_key: str, context_value: Any, ttl: int = 86400 * 7):
         """保存上下文相关的记忆"""
@@ -89,48 +93,40 @@ class MemoryManager:
             if result and isinstance(result, dict):
                 return result.get("value", default_value)
             return default_value
-        except:
-            return default_value
-    
-    async def save_entity_memory(self, user_id: str, entity_type: str, entity_name: str, entity_info: Any, ttl: int = 86400 * 30):
-        """保存实体相关的记忆（如用户提到的人、地点、概念等）"""
-        if not self.store:
-            return
-            
-        key = f"entity:{user_id}:{entity_type}:{entity_name}"
-        value = {
-            "info": entity_info,
-            "timestamp": time.time(),
-            "ttl": ttl
-        }
-        await self.store.aput(("memory",), key=key, value=value)
-        
-    async def get_entity_memory(self, user_id: str, entity_type: str, entity_name: str, default_value: Any = None) -> Any:
-        """获取实体相关的记忆"""
-        if not self.store:
-            return default_value
-            
-        key = f"entity:{user_id}:{entity_type}:{entity_name}"
-        try:
-            result = await self.store.aget(("memory",), key)
-            if result and isinstance(result, dict):
-                return result.get("info", default_value)
-            return default_value
-        except:
+        except Exception as exc:
+            logger.warning("Failed to get contextual memory [%s:%s]: %s", user_id, context_key, exc)
             return default_value
     
     async def search_related_memories(self, user_id: str, query: str, limit: int = 5) -> List[Dict]:
-        """搜索与查询相关的记忆（简化版实现）"""
-        # 由于RedisStore的限制，这里返回空列表
-        # 在实际应用中，需要实现更复杂的搜索逻辑
-        return []
+        """基于分词关键词匹配搜索相关记忆"""
+        if not self.store:
+            return []
+
+        import jieba
+        keywords = [word for word in jieba.cut(query) if len(word) > 1]
+        if not keywords:
+            return []
+
+        prefixes = [f"conversation:{user_id}:", f"context:{user_id}:"]
+        results = []
+        for prefix in prefixes:
+            items = await self.store.asearch(("memory",), filter={"prefix": prefix}, limit=100)
+            for item in items:
+                content = str(item.value.get("content", item.value.get("value", "")))
+                if any(keyword in content for keyword in keywords):
+                    results.append(item.value)
+                if len(results) >= limit:
+                    break
+            if len(results) >= limit:
+                break
+        return results
 
 
 # 全局记忆管理器实例
 memory_manager = MemoryManager()
 
 
-def get_memory_manager(store: BaseStore = None) -> MemoryManager:
+def get_memory_manager(store: AsyncPostgresStore = None) -> MemoryManager:
     """获取记忆管理器实例"""
     if store:
         return MemoryManager(store)

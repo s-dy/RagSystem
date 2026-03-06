@@ -7,8 +7,6 @@
 - _run_eval: RAG 评估
 """
 
-import time
-
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
@@ -79,23 +77,8 @@ class GenerateNodeMixin:
             "is_final": is_final,
         }
 
-        thread_id = config["configurable"].get("thread_id", "default")
-        user_id = config["configurable"].get("user_id", "default")
-        if store and thread_id and user_id:
-            if is_final:
-                await store.aput((user_id, thread_id,), key=f"final_response_{int(time.time() * 1000)}", value={
-                    "question": current_q,
-                    "response": answer,
-                    "context_used": docs,
-                    "is_final": True,
-                    "reasoning_steps": existing_steps + [sub_answer_step],
-                })
-            else:
-                await store.aput(
-                    (user_id, thread_id),
-                    key=f"sub_answer_{int(time.time() * 1000)}",
-                    value={"question": current_q, "answer": answer}
-                )
+        if not is_final:
+            monitor_task_status("sub_answer", {"question": current_q, "answer": answer})
 
         # 如果是最终答案，直接设置 answer 字段
         if is_final:
@@ -121,21 +104,27 @@ class GenerateNodeMixin:
         )
         monitor_task_status('synthesize answer', answer)
 
-        thread_id = config["configurable"].get("thread_id", "default")
-        user_id = config["configurable"].get("user_id", "default")
-        if store and thread_id and user_id:
-            await store.aput((user_id, thread_id,), key=f"synthesize_response_{int(time.time() * 1000)}", value={
-                "question": question,
-                "response": answer,
-            })
-
         return {"answer": answer}
 
-    async def __final(self, state):
-        """最终输出节点，可选触发 RAG 评估"""
+    async def __final(self, state, config: RunnableConfig):
+        """最终输出节点：统一存储问答对到 MemoryManager，可选触发 RAG 评估"""
+        thread_id = config["configurable"].get("thread_id", "default")
+        user_id = config["configurable"].get("user_id", "default")
+
+        # 统一存储最终问答对（覆盖所有路径：直接回答、单跳、多跳）
+        question = state.get("original_query") or ""
+        answer = state.get("answer") or ""
+        if self.memory_manager and user_id and question and answer:
+            await self.memory_manager.save_conversation_memory(
+                user_id=user_id,
+                thread_id=thread_id,
+                memory_type="qa_pair",
+                content={"question": question, "answer": answer},
+            )
+
         if self.config.enable_eval and state.get('need_retrieval'):
             await self.__run_eval(state)
-        return {'messages': [AIMessage(content=state['answer'])]}
+        return {'messages': [AIMessage(content=answer)]}
 
     async def __run_eval(self, state):
         """运行 RAG 评估并记录结果"""

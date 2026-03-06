@@ -7,6 +7,7 @@ from langgraph.graph import MessagesState, StateGraph, START, END
 
 from config import RagSystemConfig, POSTGRESQL_URL
 from src.core.adapter import CommonTaskAdapterHandler
+from src.core.memory_manager import MemoryManager
 from src.core.ToolsPool import ToolsPool
 from src.observability.langfuse_monitor import langfuse_handler
 from src.observability.logger import monitor_task_status
@@ -49,6 +50,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         self._document_grader = None
         self._evaluator = None
         self.tools_pool = ToolsPool()
+        self.memory_manager = MemoryManager()
         self.graph = None
 
     @property
@@ -77,6 +79,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         store = await store_ctx.__aenter__()
         await store.setup()
         await checkpointer.setup()
+        self.memory_manager = MemoryManager(store)
         graph = workflow.compile(
             checkpointer=checkpointer,
             store=store
@@ -93,6 +96,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         ):
             await store.setup()
             await checkpointer.setup()
+            self.memory_manager = MemoryManager(store)
             graph = workflow.compile(
                 checkpointer=checkpointer,
                 store=store
