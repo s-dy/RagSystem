@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import jionlp as jio
 
-from src.monitoring.logger import monitor_task_status
+from src.observability.logger import monitor_task_status
 
 
 class EnhancedTimeParser:

@@ -15,6 +15,8 @@ const API = {
     documents: `${API_BASE}/api/knowledge/documents`,
     chunkConfig: `${API_BASE}/api/knowledge/chunk-config`,
     upload: `${API_BASE}/api/knowledge/upload`,
+    ingest: `${API_BASE}/api/knowledge/ingest`,
+    ingestStatus: `${API_BASE}/api/knowledge/ingest-status`,
 };
 
 // ─── 全局状态 ───

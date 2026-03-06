@@ -1089,21 +1089,15 @@ async function uploadFiles(files, collectionName) {
             throw new Error(result.error);
         }
 
-        // 上传成功
+        // 上传成功，开始轮询入库状态
         progressFill.style.width = '100%';
         progressPercent.textContent = '100%';
-        progressTitle.textContent = '上传完成！';
+        progressTitle.textContent = '上传完成，正在处理入库...';
 
-        showToast(result.message || '文件上传成功', 'success');
+        showToast(result.message || '文件上传成功，入库处理中', 'success');
 
-        // 延迟隐藏进度条并刷新列表
-        setTimeout(() => {
-            progressContainer.classList.add('hidden');
-            dropzone.classList.remove('uploading');
-            progressFill.style.width = '0%';
-            fileListEl.innerHTML = '';
-            loadCollections();
-        }, 1500);
+        // 轮询入库状态
+        pollIngestStatus(collectionName, progressContainer, progressTitle, progressPercent, progressFill, dropzone, fileListEl);
 
     } catch (error) {
         clearInterval(progressInterval);
@@ -1122,6 +1116,80 @@ async function uploadFiles(files, collectionName) {
             fileListEl.innerHTML = '';
         }, 3000);
     }
+}
+
+// ─── 入库状态轮询 ───
+async function pollIngestStatus(collectionName, progressContainer, progressTitle, progressPercent, progressFill, dropzone, fileListEl) {
+    const maxAttempts = 60;
+    const intervalMs = 3000;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+        try {
+            const statusData = await apiFetch(
+                `${API.ingestStatus}/${encodeURIComponent(collectionName)}`,
+                {},
+                { retries: 0 },
+            );
+
+            if (statusData.status === 'completed') {
+                progressTitle.textContent = statusData.message || '入库完成！';
+                progressFill.style.width = '100%';
+                progressFill.style.background = '';
+                progressPercent.textContent = '✅';
+                showToast(statusData.message || '文档入库完成', 'success');
+
+                setTimeout(() => {
+                    progressContainer.classList.add('hidden');
+                    dropzone.classList.remove('uploading');
+                    progressFill.style.width = '0%';
+                    fileListEl.innerHTML = '';
+                    loadCollections();
+                    loadDocuments();
+                }, 2000);
+                return;
+            }
+
+            if (statusData.status === 'failed') {
+                progressTitle.textContent = statusData.message || '入库失败';
+                progressFill.style.background = 'var(--danger)';
+                progressPercent.textContent = '❌';
+                showToast(statusData.message || '文档入库失败', 'error');
+
+                setTimeout(() => {
+                    progressContainer.classList.add('hidden');
+                    dropzone.classList.remove('uploading');
+                    progressFill.style.width = '0%';
+                    progressFill.style.background = '';
+                    fileListEl.innerHTML = '';
+                }, 3000);
+                return;
+            }
+
+            // 仍在处理中，更新进度提示
+            const progressValue = Math.min(50 + attempt * 2, 95);
+            progressFill.style.width = progressValue + '%';
+            progressPercent.textContent = progressValue + '%';
+            progressTitle.textContent = statusData.message || '正在处理入库...';
+
+        } catch (error) {
+            console.warn('轮询入库状态失败:', error.message);
+        }
+    }
+
+    // 超时处理
+    progressTitle.textContent = '入库处理超时，请稍后在知识库列表中查看';
+    progressPercent.textContent = '⏳';
+    showToast('入库处理时间较长，请稍后刷新查看', 'warning');
+
+    setTimeout(() => {
+        progressContainer.classList.add('hidden');
+        dropzone.classList.remove('uploading');
+        progressFill.style.width = '0%';
+        fileListEl.innerHTML = '';
+        loadCollections();
+    }, 3000);
 }
 
 // ─── 导出需要跨文件调用的函数到全局 ───
