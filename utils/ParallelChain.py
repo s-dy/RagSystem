@@ -5,7 +5,7 @@ from langchain_core.runnables import RunnableParallel, RunnableSerializable, Run
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables.utils import Input
 
-from src.monitoring.logger import monitor_task_status
+from src.observability.logger import monitor_task_status
 
 
 class ParallelChain:

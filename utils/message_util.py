@@ -1,7 +1,7 @@
 from typing import List
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
 
-from src.monitoring.logger import monitor_task_status
+from src.observability.logger import monitor_task_status
 
 
 def get_last_user_msg(messages: List[AnyMessage]):

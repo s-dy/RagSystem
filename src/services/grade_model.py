@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 
-from src.monitoring.logger import monitor_task_status
+from src.observability.logger import monitor_task_status
 from utils.environ import set_huggingface_hf_env
 set_huggingface_hf_env()
 from sentence_transformers import SentenceTransformer, util

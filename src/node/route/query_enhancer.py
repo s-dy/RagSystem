@@ -4,8 +4,8 @@ from langchain.chat_models import BaseChatModel
 from langchain_core.runnables import RunnableSerializable
 
 from src.services.time_transformer import TimeParseTool
-from src.monitoring.logger import monitor_task_status
-from config.Config import QueryEnhancementConfig
+from src.observability.logger import monitor_task_status
+from config import QueryEnhancementConfig
 from utils.ParallelChain import ParallelChain
 
 
@@ -333,10 +333,3 @@ class QueryEnhancer(ParallelChain):
                 'end_time':time_span[1],
             })
         return result
-
-if __name__ == '__main__':
-    from utils.async_task import async_run
-    from src.services.llm.models import get_qwen_model
-    model = get_qwen_model()
-    query_enhancer = QueryEnhancer(model,QueryEnhancementConfig(paraphrase=False,expand=False,enable_query_decomposition=False,hyde_predict=False,decompose_to_subquestions=True))
-    async_run(query_enhancer.enhance('A 的 CEO 是谁？他在哪所大学获得博士学位？',{"user_expertise_level":"expert"}))

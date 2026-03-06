@@ -256,7 +256,7 @@ await storage.save_to_vector("data/knowledge_base/", use_parent_child=True)
 #### 6.3 启用父子文档检索
 
 ```python
-from config.Config import RagSystemConfig
+from config import RagSystemConfig
 from src.graph import Graph
 
 config = RagSystemConfig(enable_parent_child_retrieval=True)

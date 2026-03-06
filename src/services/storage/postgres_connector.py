@@ -3,8 +3,8 @@ from typing import List, Dict
 
 from psycopg_pool import ConnectionPool
 
-from config.Config import PostgreSQLConfig
-from src.monitoring.logger import monitor_task_status
+from config import PostgreSQLConfig
+from src.observability.logger import monitor_task_status
 from utils.decorator import singleton
 
 

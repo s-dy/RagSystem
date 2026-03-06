@@ -1,7 +1,0 @@
-{
-  "dependencies": ["langchain-openai"],
-  "graphs": {
-    "hybridRag": "./main.py:graph"
-  },
-  "env": ".env"
-}

@@ -30,18 +30,16 @@ class CrossEncoderRanker:
         else:
             self.model = CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512)
 
-    def reranker(self,query:str,retrieved_docs:list[str]) -> list[tuple[str,float]]:
-        # 生成查询-文档对
+    def reranker(self, query: str, retrieved_docs: list[str], threshold: float = 0.8) -> list[tuple[str, float]]:
+        """重排序文档并按阈值过滤，返回 (文档内容, 分数) 列表"""
         pairs = [(query, doc) for doc in retrieved_docs]
-        # 预测相关性分数
         scores = self.model.predict(pairs)
-        # 按分数降序排序
-        reranked_docs = sorted(zip(retrieved_docs, scores), key=lambda x: x[1], reverse=True)
-        # 输出重排序结果
-        # print("重排序后结果:")
-        # for i, (doc, score) in enumerate(reranked_docs):
-        #     print(f"{i + 1}. [Score: {score:.4f}] {doc}")
-        reranked_docs = list(filter(lambda x: x[1] > 0.8, reranked_docs))
+        reranked_docs = sorted(
+            [(doc, float(score)) for doc, score in zip(retrieved_docs, scores)],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        reranked_docs = [(doc, score) for doc, score in reranked_docs if score > threshold]
         return reranked_docs
 
 if __name__ == '__main__':

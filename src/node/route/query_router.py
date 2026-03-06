@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Tuple
 from langchain_core.language_models import BaseChatModel
 
-from src.monitoring.logger import monitor_task_status
+from src.observability.logger import monitor_task_status
 from utils.ParallelChain import ParallelChain
 
 

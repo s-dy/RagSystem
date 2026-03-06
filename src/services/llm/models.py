@@ -1,7 +1,6 @@
 from dotenv import load_dotenv
 import os
 from langchain.chat_models import init_chat_model
-from src.monitoring.logger import monitor_task_status
 
 load_dotenv()
 
@@ -40,10 +39,3 @@ def get_embedding_model(model,b=0.6,**kwargs):
 def get_ollama_deepseek_model(b=8,**kwargs):
     from langchain_ollama import ChatOllama
     return ChatOllama(model=f'deepseek-r1:{b}b')
-
-if __name__ == '__main__':
-    # model = get_ollama_deepseek_model()
-    # print(model.invoke('hello'))
-    # get_embedding_model()
-    embeddings = get_embedding_model('qwen')
-    monitor_task_status(embeddings.embed_query('hello world'))

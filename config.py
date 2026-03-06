@@ -11,6 +11,14 @@ class RagSystemConfig:
     enable_eval: bool = False
     # 是否启用父子文档检索策略（子文档检索 → 父文档回溯）
     enable_parent_child_retrieval: bool = False
+    # 重排序阈值：低于此分数的文档将被过滤（CrossEncoder 输出范围通常 0~1）
+    reranker_threshold: float = float(os.getenv("RERANKER_THRESHOLD", "0.8"))
+    # 文档相关性评分阈值：余弦相似度低于此值判定为不相关
+    grader_threshold: float = float(os.getenv("GRADER_THRESHOLD", "0.5"))
+
+    # 推理上下文最大字符数
+    max_reasoning_chars: int = 5000
+
 
 @dataclass
 class QueryEnhancementConfig:
