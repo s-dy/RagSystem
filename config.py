@@ -10,7 +10,7 @@ class RagSystemConfig:
     # 是否开启 RAG 评估（基于 ragas 指标）
     enable_eval: bool = False
     # 是否启用父子文档检索策略（子文档检索 → 父文档回溯）
-    enable_parent_child_retrieval: bool = False
+    enable_parent_child_retrieval: bool = True
     # 重排序阈值：低于此分数的文档将被过滤（CrossEncoder 输出范围通常 0~1）
     reranker_threshold: float = float(os.getenv("RERANKER_THRESHOLD", "0.8"))
     # 文档相关性评分阈值：余弦相似度低于此值判定为不相关
@@ -75,7 +75,7 @@ class PostgreSQLConfig:
 REDIS_URI = os.getenv("REDIS_URI", "redis://localhost:6379")
 os.environ['REDIS_URL'] = REDIS_URI
 
-POSTGRESQL_URL = f"postgresql://{PostgreSQLConfig.user}:{PostgreSQLConfig.password}@{PostgreSQLConfig.host}:{PostgreSQLConfig.port}"
+POSTGRESQL_URL = f"postgresql://{PostgreSQLConfig.user}:{PostgreSQLConfig.password}@{PostgreSQLConfig.host}:{PostgreSQLConfig.port}/{PostgreSQLConfig.dbname}"
 os.environ['POSTGRESQL_URL'] = POSTGRESQL_URL
 
 # MCP服务

@@ -1,6 +1,7 @@
 import asyncio
 from typing import List, Optional, Dict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import MessagesState, StateGraph, START, END
@@ -69,12 +70,15 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             self._document_grader = DocumentGrader(threshold=self.config.grader_threshold)
         return self._document_grader
 
-    async def _compile_graph(self, workflow):
+    async def _compile_graph(self):
         """编译 graph，使用 PostgreSQL checkpointer + store 持久化
 
         Returns:
             (compiled_graph, (conn_ctx, store_ctx))
         """
+        # 构建graph
+        workflow = await self._init_graph()
+        # 初始化 PostgreSQL 存储
         conn_ctx = AsyncPostgresSaver.from_conn_string(POSTGRESQL_URL)
         store_ctx = AsyncPostgresStore.from_conn_string(POSTGRESQL_URL)
         checkpointer = await conn_ctx.__aenter__()
@@ -89,26 +93,22 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         self.graph = graph
         return graph, (conn_ctx, store_ctx)
 
-    async def start(self, *args, **kwargs):
-        workflow = await self._init_graph()
+    async def start(self, input_data: dict, config: RunnableConfig = None):
+        graph, ctx = await self._compile_graph()
+        try:
+            return await graph.ainvoke(input_data, config)
+        except Exception as e:
+            monitor_task_status(f"推理失败：{e}")
+            raise
+        finally:
+            # 清理数据库连接上下文
+            if ctx:
+                conn_ctx, store_ctx = ctx
+                await store_ctx.__aexit__(None, None, None)
+                await conn_ctx.__aexit__(None, None, None)
 
-        async with (
-            AsyncPostgresSaver.from_conn_string(POSTGRESQL_URL) as checkpointer,
-            AsyncPostgresStore.from_conn_string(POSTGRESQL_URL) as store
-        ):
-            await store.setup()
-            await checkpointer.setup()
-            self.memory_manager = MemoryManager(store)
-            graph = workflow.compile(
-                checkpointer=checkpointer,
-                store=store
-            ).with_config(callbacks=[langfuse_handler])
-            self.graph = graph
-            if not args and not kwargs:
-                return None
-            return await graph.ainvoke(*args, **kwargs)
 
-    async def start_stream(self, input_data: dict, config: dict):
+    async def start_stream(self, input_data: dict, config: RunnableConfig = None):
         """流式输出入口：逐 token 返回 LLM 生成内容和节点状态更新
 
         使用方式：
@@ -118,8 +118,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             ):
                 print(event)  # {"type": "token", "content": "..."} 或 {"type": "node", ...}
         """
-        workflow = await self._init_graph()
-        graph, ctx = await self._compile_graph(workflow)
+        graph, ctx = await self._compile_graph()
 
         try:
             async for event in graph.astream_events(input_data, config, version="v2"):

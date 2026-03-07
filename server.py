@@ -1,8 +1,3 @@
-"""HybridRAG 前端 API 服务
-
-启动方式：uvicorn server:app --reload --port 8000
-"""
-
 import asyncio
 import json
 import uuid
@@ -53,7 +48,7 @@ async def get_graph() -> Graph:
     global rag_graph
     if rag_graph is None:
         rag_graph = Graph()
-        await rag_graph.start()
+        await rag_graph._compile_graph()
     return rag_graph
 
 
@@ -81,7 +76,7 @@ async def chat(request: Request):
         }
     }
 
-    result = await graph.graph.ainvoke(input_data, config)
+    result = await graph.start(input_data, config)
     answer = result.get("answer", "")
 
     # 记录会话

@@ -83,22 +83,6 @@ class DataDBStorage:
         monitor_task_status("total child documents", len(child_docs))
         return parent_store, child_docs
 
-    async def save_to_vector(self, data_path: str, use_parent_child: bool = False,
-                             chunk_size: int = 1024, chunk_overlap: int = 128):
-        """加载文档 → 分块 → 向量化 → 入库"""
-        vector = self._get_vector_store()
-        if use_parent_child:
-            parent_store, child_docs = await self.load_and_chunk_parent_child(
-                data_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
-            )
-            PostgreSQLConnector().batch_insert_parent_documents(parent_store)
-            monitor_task_status("parent documents saved to PostgreSQL", len(parent_store))
-            await vector.client.aadd_documents(documents=child_docs)
-            monitor_task_status("child documents saved to Milvus", len(child_docs))
-        else:
-            documents = await self.load_data_and_chunk(data_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-            await vector.client.aadd_documents(documents=documents)
-
     async def ingest(self, config: IngestConfig, data_path: str) -> dict:
         """完整的文档入库流程：加载 → 分块 → 向量化 → 写入 Milvus
 

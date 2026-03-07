@@ -1,8 +1,4 @@
-import os
-
-from src.graph import Graph
-from utils.async_task import async_run
-
-os.environ['IS_LANGSMITH'] = 'True'
-
-graph = async_run(Graph().graph)
+import uvicorn
+from server import app
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
