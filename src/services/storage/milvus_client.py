@@ -1,9 +1,42 @@
 import threading
 
 from langchain_milvus import Milvus, BM25BuiltInFunction
+from pymilvus import connections, db
 
 from config import MilvusConfig
+from src.observability.logger import monitor_task_status
 from src.services.llm.models import get_embedding_model
+
+
+_milvus_db_ensured = set()
+
+def ensure_milvus_database_exists(config: MilvusConfig = None):
+    """检测目标 Milvus 数据库是否存在，不存在则自动创建"""
+    if config is None:
+        config = MilvusConfig()
+    target_db = config.db_name
+    if target_db in _milvus_db_ensured:
+        return
+
+    alias = f"db_check_{target_db}"
+    try:
+        connections.connect(
+            alias=alias,
+            host=config.host,
+            port=config.port,
+            token=config.token,
+        )
+        existing_dbs = db.list_database(using=alias)
+        if target_db not in existing_dbs:
+            db.create_database(target_db, using=alias)
+            monitor_task_status(f"Milvus 数据库 '{target_db}' 不存在，已自动创建")
+        _milvus_db_ensured.add(target_db)
+        connections.disconnect(alias)
+    except Exception as error:
+        monitor_task_status(
+            f"检测/创建 Milvus 数据库 '{target_db}' 失败: {error}",
+            level="WARNING",
+        )
 
 
 class MilvusExecutor:
@@ -30,6 +63,7 @@ class MilvusExecutor:
         if config is None:
             config = MilvusConfig()
         self.config = config
+        ensure_milvus_database_exists(config)
         self.dense_embedding = get_embedding_model("qwen")
         self.vector_store = self._create_client()
         self._initialized = True

@@ -6,7 +6,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import MessagesState, StateGraph, START, END
 
-from config import RagSystemConfig, POSTGRESQL_URL
+from config import RagSystemConfig, POSTGRESQL_URL, PostgreSQLConfig
 from src.core.adapter import CommonTaskAdapterHandler
 from src.core.memory_manager import MemoryManager
 from src.core.tools_pool import ToolsPool
@@ -78,6 +78,9 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         """
         # 构建graph
         workflow = await self._init_graph()
+        # 确保 PostgreSQL 数据库存在（POSTGRESQL_URL 直连，不经过 PostgreSQLConnector）
+        from src.services.storage.postgres_connector import ensure_postgres_database_exists
+        ensure_postgres_database_exists(PostgreSQLConfig())
         # 初始化 PostgreSQL 存储
         conn_ctx = AsyncPostgresSaver.from_conn_string(POSTGRESQL_URL)
         store_ctx = AsyncPostgresStore.from_conn_string(POSTGRESQL_URL)

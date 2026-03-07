@@ -1,11 +1,39 @@
 import json
 from typing import List, Dict
 
+import psycopg
 from psycopg_pool import ConnectionPool
 
 from config import PostgreSQLConfig
 from src.observability.logger import monitor_task_status
 from utils.decorator import singleton
+
+
+def ensure_postgres_database_exists(config: PostgreSQLConfig = None):
+    """检测目标 PostgreSQL 数据库是否存在，不存在则自动创建"""
+    if config is None:
+        config = PostgreSQLConfig()
+    admin_conninfo = (
+        f"host={config.host} port={config.port} "
+        f"user={config.user} password={config.password} "
+        f"dbname=postgres"
+    )
+    try:
+        conn = psycopg.connect(admin_conninfo, autocommit=True)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s", (config.dbname,)
+        )
+        if not cursor.fetchone():
+            cursor.execute(f'CREATE DATABASE "{config.dbname}"')
+            monitor_task_status(f"PostgreSQL 数据库 '{config.dbname}' 不存在，已自动创建")
+        cursor.close()
+        conn.close()
+    except Exception as error:
+        monitor_task_status(
+            f"检测/创建 PostgreSQL 数据库 '{config.dbname}' 失败: {error}",
+            level="WARNING",
+        )
 
 
 @singleton
@@ -14,6 +42,9 @@ class PostgreSQLConnector:
         if config is None:
             config = PostgreSQLConfig()
         self.config = config
+
+        # 在创建连接池之前，确保目标数据库存在
+        ensure_postgres_database_exists(config)
 
         conninfo = (
             f"host={config.host} port={config.port} "
