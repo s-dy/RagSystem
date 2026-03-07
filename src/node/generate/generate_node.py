@@ -13,6 +13,7 @@ from langgraph.store.base import BaseStore
 
 from .generate import (
     generate_answer_for_query,
+    generate_direct_chat_answer,
     synthesize_final_subs,
     compress_reasoning_context,
 )
@@ -117,13 +118,30 @@ class GenerateNodeMixin:
         return {"answer": answer}
 
     async def __final(self, state, config: RunnableConfig):
-        """最终输出节点：统一存储问答对到 MemoryManager，可选触发 RAG 评估"""
+        """最终输出节点：根据 need_retrieval 选择不同策略生成回复
+
+        - need_retrieval=False: 调用 LLM 用对话 prompt 直接回复（支持流式 token 输出）
+        - need_retrieval=True: 使用已有的 answer（来自 generate_current_answer/synthesize）
+        """
         thread_id = config["configurable"].get("thread_id", "default")
         user_id = config["configurable"].get("user_id", "default")
-
-        # 统一存储最终问答对（覆盖所有路径：直接回答、单跳、多跳）
         question = state.get("original_query") or ""
-        answer = state.get("answer") or ""
+
+        if not state.get("need_retrieval"):
+            # 不需要检索：调用 LLM 直接生成对话回复（token 会被 messages 模式捕获并流式展示）
+            conversation_context = await get_conversation_context_adaptive(
+                state['messages'], self.llm,  max_context_tokens=self.config.max_context_tokens,
+            )
+            answer = await generate_direct_chat_answer(
+                self.llm,
+                query=question,
+                conversation_context=conversation_context,
+            )
+        else:
+            # 需要检索：使用已有的 answer
+            answer = state.get("answer") or ""
+
+        # 统一存储最终问答对
         if self.memory_manager and user_id and question and answer:
             await self.memory_manager.save_conversation_memory(
                 user_id=user_id,

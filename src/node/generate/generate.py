@@ -59,6 +59,19 @@ compress_system_prompt = """
 - 保持信息的准确性和完整性
 """
 
+direct_chat_system_prompt = """
+你是一个友好、专业的智能助手。请根据对话历史和用户的当前问题，直接给出回复。
+
+对话历史：
+{conversation_context}
+
+规则：
+1. 对于问候、闲聊等日常对话，给出自然、友好的回复。
+2. 对于不需要外部知识就能回答的问题（如常识、推理、建议等），直接回答。
+3. 回答要连贯，符合对话上下文。
+4. 不要编造具体的事实或数据。
+"""
+
 
 def _build_answer_chain(llm: BaseChatModel, is_final: bool):
     """构建答案生成的 chain，供流式和非流式共用"""
@@ -125,6 +138,19 @@ async def synthesize_final_subs(llm, query, reasoning_context):
     return await chain.ainvoke({
         "reasoning_context": reasoning_context,
         "query": query,
+    })
+
+
+async def generate_direct_chat_answer(llm: BaseChatModel, query: str, conversation_context: str = "") -> str:
+    """直接对话回复（不需要检索的场景），供 final 节点调用"""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", direct_chat_system_prompt),
+        ("human", "{query}")
+    ])
+    chain = prompt | llm | StrOutputParser()
+    return await chain.ainvoke({
+        "query": query,
+        "conversation_context": conversation_context,
     })
 
 

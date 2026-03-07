@@ -15,7 +15,7 @@ from langgraph.store.base import BaseStore
 
 from .query_router import QueryRouter
 from .query_enhancer import QueryEnhancer
-from .retrieve_or_response import retrieve_answer_or_retrieve
+from .retrieve_or_response import check_need_retrieval
 
 from config import QueryEnhancementConfig
 from src.services.task_analyzer import TaskCharacteristics, TaskAnalyzer, TaskType
@@ -88,16 +88,14 @@ class RouteNodeMixin:
         monitor_task_status("Task Analysis Result", repr(task_char))
 
         # 检查是否需要检索
-        response = await retrieve_answer_or_retrieve(self.llm, query, conversation_context)
-        is_need_retrieval = response.strip().find("NEED_RETRIEVAL") > -1 or task_char.task_type == TaskType.FACT_RETRIEVAL
+        is_need_retrieval = await check_need_retrieval(self.llm, query, conversation_context)
+        is_need_retrieval = is_need_retrieval or task_char.task_type == TaskType.FACT_RETRIEVAL
 
         if not is_need_retrieval:
-            # LLM 已直接生成回复内容，存入 answer
             return {
                 **compress_result,
                 'original_query': query,
                 'need_retrieval': False,
-                'answer': response,
             }
 
         if task_char.is_multi_hop:
