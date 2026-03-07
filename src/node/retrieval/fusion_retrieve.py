@@ -22,16 +22,21 @@ class FusionRetrieve:
         """异步搜索单个查询，返回带来源和分数的结构化结果"""
         try:
             vector_client = MilvusExecutor(MilvusConfig(collection_name=collection_name)).client
+            # # weighted
+            # result = await vector_client.asimilarity_search_with_score(
+            #     query, k=4, ranker_type="weighted", ranker_params={"weights": [0.7, 0.3]}
+            # )
+            # rrf
             result = await vector_client.asimilarity_search_with_score(
-                query, k=4, ranker_type="weighted", ranker_params={"weights": [0.7, 0.3]}
+                query, k=4, ranker_type="rrf", ranker_params={"k": 60}
             )
-            filtered = [(doc, score) for doc, score in result if score >= 0.2]
+            # filtered = [(doc, score) for doc, score in result if score >= 0.2]
 
             if self.use_parent_child:
                 return await self._resolve_parent_documents_structured(filtered)
 
             retrieved_docs = []
-            for doc, score in filtered:
+            for doc, score in result:
                 source = doc.metadata.get("source", "未知来源")
                 retrieved_docs.append(RetrievedDoc(
                     content=doc.page_content,

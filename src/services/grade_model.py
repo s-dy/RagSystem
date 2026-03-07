@@ -37,19 +37,36 @@ class DocumentGrader:
 
         self.threshold = threshold
 
-    def grade(self, question: str, docs: list) -> bool:
-        if not docs:
-            return False
-        # 将文档内容合并
-        combined_docs = "\n".join(docs)
-        # 计算嵌入向量
-        question_embedding = self.model.encode(question,convert_to_tensor=True)
-        docs_embedding = self.model.encode(combined_docs,convert_to_tensor=True)
+    def grade(self, question: str, docs: list) -> list[str]:
+        """逐文档评分，返回通过阈值的相关文档列表
 
-        # 计算余弦相似度
-        similarity = util.pytorch_cos_sim(question_embedding,docs_embedding).item()
-        monitor_task_status('doc score with question',similarity)
-        return similarity >= self.threshold
+        :param question: 用户查询
+        :param docs: 检索到的文档内容列表
+        :return: 通过相关性阈值的文档列表
+        """
+        if not docs:
+            return []
+        question_embedding = self.model.encode(question, convert_to_tensor=True)
+        docs_embeddings = self.model.encode(docs, convert_to_tensor=True)
+        similarities = util.pytorch_cos_sim(question_embedding, docs_embeddings).squeeze(0)
+
+        relevant_docs = []
+        for idx, (doc, score) in enumerate(zip(docs, similarities)):
+            similarity_value = score.item()
+            monitor_task_status(f'doc[{idx}] score with question', similarity_value)
+            if similarity_value >= self.threshold:
+                relevant_docs.append(doc)
+
+        monitor_task_status('grade_result', {
+            'total': len(docs),
+            'relevant': len(relevant_docs),
+            'threshold': self.threshold,
+        })
+        return relevant_docs
+
+    def is_relevant(self, question: str, docs: list) -> bool:
+        """判断文档集合中是否存在相关文档（兼容旧接口）"""
+        return len(self.grade(question, docs)) > 0
 
     def get_similarity(self,question: str, answer: str) -> float:
         question_embedding = self.model.encode(question,convert_to_tensor=True)

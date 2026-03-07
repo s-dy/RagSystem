@@ -140,15 +140,32 @@ class RetrievalNodeMixin:
             for text in external_texts:
                 external_retrieved_docs.append(RetrievedDoc(content=text, source="外部搜索", score=0.5))
 
-        # 融合 + 去重
+        # 融合 + 近似去重（基于 embedding 余弦相似度）
         all_retrieved = internal_docs + external_retrieved_docs
-        seen = set()
         unique_retrieved: List[RetrievedDoc] = []
-        for retrieved_doc in all_retrieved:
-            normalized = re.sub(r'[^\w\s]', '', retrieved_doc.content.lower().strip())
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                unique_retrieved.append(retrieved_doc)
+        if all_retrieved:
+            doc_texts = [d.content for d in all_retrieved]
+            embeddings = await asyncio.to_thread(
+                self.document_grader.model.encode, doc_texts, convert_to_tensor=True,
+            )
+            from sentence_transformers import util as st_util
+            dedup_similarity_threshold = 0.92
+            for idx, retrieved_doc in enumerate(all_retrieved):
+                is_duplicate = False
+                for kept_idx in range(len(unique_retrieved)):
+                    original_idx = doc_texts.index(unique_retrieved[kept_idx].content)
+                    similarity = st_util.pytorch_cos_sim(
+                        embeddings[idx], embeddings[original_idx],
+                    ).item()
+                    if similarity >= dedup_similarity_threshold:
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    unique_retrieved.append(retrieved_doc)
+            monitor_task_status('dedup_result', {
+                'before': len(all_retrieved),
+                'after': len(unique_retrieved),
+            })
 
         # 交叉编码器重排序
         rerank_scores: List[float] = []
@@ -171,6 +188,24 @@ class RetrievalNodeMixin:
                     score=score,
                 ))
                 rerank_scores.append(score)
+
+            # 兜底机制：如果重排序过滤掉了所有文档，保留原始排序的 top-1
+            if not ordered_docs:
+                all_scores = self.cross_encoder_ranker.model.predict(
+                    [(rerank_query, d.content) for d in unique_retrieved]
+                )
+                best_idx = int(max(range(len(all_scores)), key=lambda i: all_scores[i]))
+                best_doc = unique_retrieved[best_idx]
+                ordered_docs.append(RetrievedDoc(
+                    content=best_doc.content,
+                    source=best_doc.source,
+                    score=float(all_scores[best_idx]),
+                ))
+                rerank_scores.append(float(all_scores[best_idx]))
+                monitor_task_status('rerank_fallback', {
+                    'reason': 'all docs below threshold, keeping top-1',
+                    'fallback_score': float(all_scores[best_idx]),
+                })
 
             # 构建带来源编号的 content，供 Prompt 引用 [1][2]
             numbered_parts = []
@@ -207,8 +242,8 @@ class RetrievalNodeMixin:
         if not retrieved_docs or grade_retry_count >= 2:
             return 'good'
 
-        grade = await asyncio.to_thread(self.document_grader.grade, question, retrieved_docs)
-        if grade:
+        relevant_docs = await asyncio.to_thread(self.document_grader.grade, question, retrieved_docs)
+        if relevant_docs:
             return 'good'
         else:
             return 'bad'

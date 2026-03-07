@@ -8,7 +8,7 @@ from langgraph.graph import MessagesState, StateGraph, START, END
 from config import RagSystemConfig, POSTGRESQL_URL
 from src.core.adapter import CommonTaskAdapterHandler
 from src.core.memory_manager import MemoryManager
-from src.core.ToolsPool import ToolsPool
+from src.core.tools_pool import ToolsPool
 from src.observability.langfuse_monitor import langfuse_handler
 from src.observability.logger import monitor_task_status
 from src.services.cross_encoder_ranker import CrossEncoderRanker
@@ -208,14 +208,14 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
     async def _init_graph(self):
         graph = StateGraph(State)
 
-        # 统一节点
-        graph.add_node('retrieve_or_respond', self.__retrieve_or_respond)
-        graph.add_node('prepare_next_step', self.__prepare_next_step)
-        graph.add_node('enhance_and_route_current', self.__enhance_and_route_current)
-        graph.add_node('fusion_retrieve', self.__fusion_retrieve)
-        graph.add_node('generate_current_answer', self.__generate_current_answer)
-        graph.add_node('synthesize', self.__synthesize)
-        graph.add_node('final', self.__final)
+        # 统一节点（使用修饰后的名称访问 Mixin 中的双下划线方法）
+        graph.add_node('retrieve_or_respond', self._RouteNodeMixin__retrieve_or_respond)
+        graph.add_node('prepare_next_step', self._RouteNodeMixin__prepare_next_step)
+        graph.add_node('enhance_and_route_current', self._RouteNodeMixin__enhance_and_route_current)
+        graph.add_node('fusion_retrieve', self._RetrievalNodeMixin__fusion_retrieve)
+        graph.add_node('generate_current_answer', self._GenerateNodeMixin__generate_current_answer)
+        graph.add_node('synthesize', self._GenerateNodeMixin__synthesize)
+        graph.add_node('final', self._GenerateNodeMixin__final)
 
         # 图结构
         graph.add_edge(START, 'retrieve_or_respond')
@@ -232,7 +232,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         graph.add_edge('enhance_and_route_current', 'fusion_retrieve')
         graph.add_conditional_edges(
             'fusion_retrieve',
-            self.__grade_documents,
+            self._RetrievalNodeMixin__grade_documents,
             {'good':'generate_current_answer','bad':'enhance_and_route_current'}
         )
         # 条件循环：检查是否还有子问题
