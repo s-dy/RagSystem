@@ -17,7 +17,7 @@ from .generate import (
     compress_reasoning_context,
 )
 from src.observability.logger import monitor_task_status
-from utils.message_util import get_conversation_context
+from utils.message_util import get_conversation_context_adaptive
 
 
 class GenerateNodeMixin:
@@ -26,7 +26,9 @@ class GenerateNodeMixin:
     async def __generate_current_answer(self, state, config: RunnableConfig, store: BaseStore) -> dict:
         """生成当前查询的答案（支持流式输出和置信度）"""
         current_q = state.get("current_sub_question") or state["original_query"]
-        conversation_context = get_conversation_context(state['messages'], num_messages=6)
+        conversation_context = await get_conversation_context_adaptive(
+            state['messages'], self.llm, max_context_tokens=self.config.max_context_tokens,
+        )
         docs = state["search_content"] or "未找到相关信息"
 
         # 判断是否为最终答案
@@ -77,8 +79,16 @@ class GenerateNodeMixin:
             "is_final": is_final,
         }
 
-        if not is_final:
-            monitor_task_status("sub_answer", {"question": current_q, "answer": answer})
+        thread_id = config["configurable"].get("thread_id", "default")
+        user_id = config["configurable"].get("user_id", "default")
+        # 如果不是最终答案，记录子问题答案
+        if not is_final and self.memory_manager and user_id:
+            await self.memory_manager.save_conversation_memory(
+                user_id=user_id,
+                thread_id=thread_id,
+                memory_type="qa_pair",
+                content={"question": current_q, "answer": answer},
+            )
 
         # 如果是最终答案，直接设置 answer 字段
         if is_final:

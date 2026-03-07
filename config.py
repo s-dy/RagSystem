@@ -19,6 +19,22 @@ class RagSystemConfig:
     # 推理上下文最大字符数
     max_reasoning_chars: int = 5000
 
+    # === 对话压缩相关配置 ===
+    # 是否启用跨轮对话历史压缩
+    enable_conversation_compress: bool = True
+    # 最大对话轮数（超过则触发压缩，1 轮 = 1 条 Human + 1 条 AI）
+    max_conversation_turns: int = 10
+    # 最大对话 token 数（超过则触发压缩）
+    max_conversation_tokens: int = 4000
+    # 压缩时保留最近的轮数（不被压缩）
+    keep_recent_turns: int = 3
+    # 单次压缩的最大 token 数（超过则分批压缩）
+    max_compress_tokens: int = 6000
+    # 渐进式摘要触发间隔（每隔多少轮触发一次增量摘要）
+    incremental_summary_interval: int = 5
+    # 对话上下文窗口自适应的最大 token 预算
+    max_context_tokens: int = 2000
+
 
 @dataclass
 class QueryEnhancementConfig:

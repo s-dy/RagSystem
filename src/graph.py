@@ -37,6 +37,8 @@ class State(MessagesState):
     reasoning_context: str  # 已解决的上下文（用于注入后续步骤）
     reasoning_steps: List[dict]  # 推理过程记录（子问题分解、中间答案等）
 
+    conversation_summary: str  # 渐进式摘要：跨轮对话的累积摘要
+
 
 class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
     def __init__(self, config: RagSystemConfig = None):

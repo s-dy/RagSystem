@@ -22,7 +22,16 @@ from src.services.task_analyzer import TaskCharacteristics, TaskAnalyzer, TaskTy
 from src.services.storage import PostgreSQLConnector
 from src.observability.logger import monitor_task_status
 
-from utils.message_util import get_last_user_msg, get_conversation_context
+from utils.message_util import (
+    get_last_user_msg,
+    get_conversation_context,
+    get_conversation_context_adaptive,
+    compress_conversation_history,
+    estimate_messages_tokens,
+    build_remove_and_replace_messages,
+    incremental_summarize_with_anchors,
+    should_trigger_incremental_summary,
+)
 
 
 class RouteNodeMixin:
@@ -31,8 +40,48 @@ class RouteNodeMixin:
     async def __retrieve_or_respond(self, state, config: RunnableConfig, store: BaseStore) -> dict:
         """统一入口：决定是否需要检索，并初始化多跳结构"""
         monitor_task_status("---GENERATE QUERY OR RESPOND---")
-        query = get_last_user_msg(state['messages'])
-        conversation_context = get_conversation_context(state['messages'], num_messages=5)
+        messages = state['messages']
+
+        # === 策略 1：跨轮对话历史压缩 ===
+        compress_result = {}
+        if self.config.enable_conversation_compress:
+            current_turns = len(messages) // 2
+            current_tokens = estimate_messages_tokens(messages)
+            turns_exceeded = len(messages) > self.config.max_conversation_turns * 2
+            tokens_exceeded = current_tokens > self.config.max_conversation_tokens
+            monitor_task_status("compress_check", {
+                "turns": current_turns,
+                "tokens": current_tokens,
+                "turns_exceeded": turns_exceeded,
+                "tokens_exceeded": tokens_exceeded,
+            })
+            if turns_exceeded or tokens_exceeded:
+                monitor_task_status("---COMPRESSING CONVERSATION HISTORY---")
+                compressed = await compress_conversation_history(
+                    self.llm, messages, keep_recent=self.config.keep_recent_turns,
+                    max_compress_tokens=self.config.max_compress_tokens,
+                )
+                compress_result["messages"] = build_remove_and_replace_messages(messages, compressed)
+                monitor_task_status("compress_done", {
+                    "original_count": len(messages),
+                    "compressed_count": len(compressed),
+                })
+                messages = compressed
+
+        # === 策略 6：渐进式摘要 ===
+        if should_trigger_incremental_summary(messages, self.config.incremental_summary_interval):
+            existing_summary = state.get("conversation_summary", "")
+            updated_summary = await incremental_summarize_with_anchors(
+                self.llm, existing_summary, messages,
+            )
+            compress_result["conversation_summary"] = updated_summary
+
+        query = get_last_user_msg(messages)
+
+        # === 策略 2：对话上下文窗口自适应 ===
+        conversation_context = await get_conversation_context_adaptive(
+            messages, self.llm, max_context_tokens=self.config.max_context_tokens,
+        )
 
         task_analyzer = TaskAnalyzer()
         task_char = task_analyzer.analyze_task(query)
@@ -45,6 +94,7 @@ class RouteNodeMixin:
         if not is_need_retrieval:
             # LLM 已直接生成回复内容，存入 answer
             return {
+                **compress_result,
                 'original_query': query,
                 'need_retrieval': False,
                 'answer': response,
@@ -60,6 +110,7 @@ class RouteNodeMixin:
         monitor_task_status("need_retrieval", {"query": query, "result": True})
 
         return {
+            **compress_result,
             'original_query': query,
             'need_retrieval': True,
             'run_count': 0,
