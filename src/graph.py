@@ -11,7 +11,7 @@ from src.core.adapter import CommonTaskAdapterHandler
 from src.core.memory_manager import MemoryManager
 from src.core.tools_pool import ToolsPool
 from src.observability.langfuse_monitor import langfuse_handler
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger, set_request_id
 from src.services.cross_encoder_ranker import CrossEncoderRanker
 from src.services.grade_model import DocumentGrader
 from src.services.llm.models import get_qwen_model, get_embedding_model
@@ -20,6 +20,8 @@ from src.node.route import RouteNodeMixin
 from src.node.retrieval import RetrievalNodeMixin
 from src.node.generate import GenerateNodeMixin
 
+
+logger = get_logger(__name__)
 
 class State(MessagesState):
     original_query: str  # 原始查询
@@ -98,17 +100,19 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
 
     async def start(self, input_data: dict, config: RunnableConfig = None):
         graph, ctx = await self._compile_graph()
+        # 设置请求ID用于日志追踪
+        thread_id = config.get("configurable", {}).get("thread_id", "unknown") if config else "unknown"
+        set_request_id(thread_id)
         try:
             return await graph.ainvoke(input_data, config)
         except Exception as e:
-            monitor_task_status(f"推理失败：{e}")
+            logger.error(f"[Graph] 推理失败: {e}")
             raise
         finally:
             if ctx:
                 conn_ctx, store_ctx = ctx
                 await store_ctx.__aexit__(None, None, None)
                 await conn_ctx.__aexit__(None, None, None)
-
 
     async def start_stream(self, input_data: dict, config: RunnableConfig = None):
         """流式输出入口：逐 token 返回 LLM 生成内容和节点状态更新
@@ -121,6 +125,10 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                 print(event)  # {"type": "token", "content": "..."} 或 {"type": "node", ...}
         """
         graph, ctx = await self._compile_graph()
+        
+        # 设置请求ID用于日志追踪
+        thread_id = config.get("configurable", {}).get("thread_id", "unknown") if config else "unknown"
+        set_request_id(thread_id)
 
         # 是否为多跳场景（用于控制 token 展示策略）
         is_multi_hop = False
@@ -135,7 +143,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                 # 检查当前任务是否已被取消
                 current_task = asyncio.current_task()
                 if current_task and current_task.cancelled():
-                    monitor_task_status("流式推理被前端中断，停止生成", level="WARNING")
+                    logger.warning("[Graph] 流式推理被中断: 前端主动取消")
                     break
 
                 # 处理不同类型的流式输出
@@ -201,7 +209,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             yield {"type": "done"}
 
         except asyncio.CancelledError:
-            monitor_task_status("流式推理任务被取消，正在清理资源", level="WARNING")
+            logger.warning("[Graph] 流式推理被取消: 正在清理资源")
             raise
         finally:
             if ctx:

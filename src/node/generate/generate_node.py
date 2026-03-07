@@ -11,29 +11,36 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
 
+from src.observability.logger import get_logger
+from utils.message_util import get_conversation_context_adaptive
 from .generate import (
     generate_answer_for_query,
     generate_direct_chat_answer,
     synthesize_final_subs,
     compress_reasoning_context,
 )
-from src.observability.logger import monitor_task_status
-from utils.message_util import get_conversation_context_adaptive
+
+logger = get_logger(__name__)
 
 
 class GenerateNodeMixin:
     """生成节点方法集合，通过 Mixin 注入到 Graph 类"""
 
-    async def __generate_current_answer(self, state, config: RunnableConfig, store: BaseStore) -> dict:
+    async def __generate_current_answer(
+        self, state, config: RunnableConfig, store: BaseStore
+    ) -> dict:
         """生成当前查询的答案（支持流式输出和置信度）"""
         current_q = state.get("current_sub_question") or state["original_query"]
+        logger.info(f"[GenerateNode] 开始生成答案: query={current_q[:50]}...")
         conversation_context = await get_conversation_context_adaptive(
-            state['messages'], self.llm, max_context_tokens=self.config.max_context_tokens,
+            state["messages"],
+            self.llm,
+            max_context_tokens=self.config.max_context_tokens,
         )
         docs = state["search_content"] or "未找到相关信息"
 
         # 判断是否为最终答案
-        if state['task_characteristics'].is_multi_hop:
+        if state["task_characteristics"].is_multi_hop:
             is_final = len(state["sub_questions"]) == 0
         else:
             is_final = len(state["sub_questions"]) == 1
@@ -61,15 +68,25 @@ class GenerateNodeMixin:
                 else:
                     confidence_level = "低"
                 answer += f"\n\n📊 置信度：{confidence_level}（{avg_score:.2f}）| 参考来源：{source_count} 篇文档"
+                logger.info(
+                    f"[GenerateNode] 最终答案生成完成: confidence={confidence_level}, avg_score={avg_score:.2f}, sources={source_count}"
+                )
 
-        monitor_task_status('current answer', answer)
+        logger.debug(
+            f"[GenerateNode] 答案生成完成: is_final={is_final}, answer_length={len(answer)}"
+        )
 
         # 更新状态
         remaining_subs = state["sub_questions"][1:] if state["sub_questions"] else []
-        new_reasoning_context = state.get("reasoning_context", "") + f"问题：{current_q}\n答案：{answer}\n\n"
+        new_reasoning_context = (
+            state.get("reasoning_context", "")
+            + f"问题：{current_q}\n答案：{answer}\n\n"
+        )
 
         # 压缩过长的 reasoning_context
-        new_reasoning_context = await compress_reasoning_context(self.llm, new_reasoning_context)
+        new_reasoning_context = await compress_reasoning_context(
+            self.llm, new_reasoning_context
+        )
 
         # 记录推理步骤
         existing_steps = state.get("reasoning_steps", [])
@@ -93,7 +110,11 @@ class GenerateNodeMixin:
 
         # 如果是最终答案，直接设置 answer 字段
         if is_final:
-            return {"answer": answer, "sub_questions": [], "reasoning_steps": existing_steps + [sub_answer_step]}
+            return {
+                "answer": answer,
+                "sub_questions": [],
+                "reasoning_steps": existing_steps + [sub_answer_step],
+            }
 
         return {
             "sub_questions": remaining_subs,
@@ -102,10 +123,13 @@ class GenerateNodeMixin:
             "reasoning_steps": existing_steps + [sub_answer_step],
         }
 
-    async def __synthesize(self, state, config: RunnableConfig, store: BaseStore) -> dict:
+    async def __synthesize(
+        self, state, config: RunnableConfig, store: BaseStore
+    ) -> dict:
         """合并答案"""
-        if not state['task_characteristics'].is_multi_hop:
+        if not state["task_characteristics"].is_multi_hop:
             return {}
+        logger.info("[GenerateNode] 开始综合多跳答案")
         question = state["original_query"]
         reasoning_ctx = state.get("reasoning_context", "")
         answer = await synthesize_final_subs(
@@ -113,7 +137,7 @@ class GenerateNodeMixin:
             query=question,
             reasoning_context=reasoning_ctx,
         )
-        monitor_task_status('synthesize answer', answer)
+        logger.info(f"[GenerateNode] 多跳答案综合完成: answer_length={len(answer)}")
 
         return {"answer": answer}
 
@@ -129,8 +153,11 @@ class GenerateNodeMixin:
 
         if not state.get("need_retrieval"):
             # 不需要检索：调用 LLM 直接生成对话回复（token 会被 messages 模式捕获并流式展示）
+            logger.info(f"[GenerateNode] 直接对话模式: query={question[:50]}...")
             conversation_context = await get_conversation_context_adaptive(
-                state['messages'], self.llm,  max_context_tokens=self.config.max_context_tokens,
+                state["messages"],
+                self.llm,
+                max_context_tokens=self.config.max_context_tokens,
             )
             answer = await generate_direct_chat_answer(
                 self.llm,
@@ -140,6 +167,7 @@ class GenerateNodeMixin:
         else:
             # 需要检索：使用已有的 answer
             answer = state.get("answer") or ""
+            logger.info(f"[GenerateNode] 检索模式最终输出: answer_length={len(answer)}")
 
         # 统一存储最终问答对
         if self.memory_manager and user_id and question and answer:
@@ -150,9 +178,9 @@ class GenerateNodeMixin:
                 content={"question": question, "answer": answer},
             )
 
-        if self.config.enable_eval and state.get('need_retrieval'):
+        if self.config.enable_eval and state.get("need_retrieval"):
             await self.__run_eval(state)
-        return {'messages': [AIMessage(content=answer)]}
+        return {"messages": [AIMessage(content=answer)]}
 
     async def __run_eval(self, state):
         """运行 RAG 评估并记录结果"""
@@ -168,11 +196,8 @@ class GenerateNodeMixin:
                 retrieved_contexts=state.get("retrieved_documents", []),
             )
             scores = await self._evaluator.evaluate_sample(sample)
-            monitor_task_status("RAG 评估结果", {
-                "faithfulness": scores.faithfulness,
-                "answer_relevancy": scores.answer_relevancy,
-                "context_relevance": scores.context_relevance,
-                "context_recall": scores.context_recall,
-            })
+            logger.info(
+                f"[GenerateNode] RAG评估完成: faithfulness={scores.faithfulness:.3f}, answer_relevancy={scores.answer_relevancy:.3f}, context_relevance={scores.context_relevance:.3f}"
+            )
         except Exception as eval_error:
-            monitor_task_status(f"RAG 评估执行失败: {eval_error}", level="WARNING")
+            logger.warning(f"[GenerateNode] RAG评估执行失败: {eval_error}")

@@ -1,64 +1,102 @@
-from typing import List, Dict, Any, Optional
 import re
+from typing import List, Dict, Any, Optional
+
 from langchain.chat_models import BaseChatModel
 from langchain_core.runnables import RunnableSerializable
 
+from src.observability.logger import get_logger
 from src.services.time_transformer import TimeParseTool
-from src.observability.logger import monitor_task_status
+
+logger = get_logger(__name__)
+
 from config import QueryEnhancementConfig
 from utils.ParallelChain import ParallelChain
 
 
 class QueryEnhancer(ParallelChain):
     """查询增强器"""
-    def __init__(self, llm_client: BaseChatModel, config: QueryEnhancementConfig = None):
+
+    def __init__(
+        self, llm_client: BaseChatModel, config: QueryEnhancementConfig = None
+    ):
         super().__init__(llm_client)
         if not config:
             config = QueryEnhancementConfig()
         self.config = config
         self.llm_client = llm_client
-        self.time_parse_tool = TimeParseTool(config={'include_source': True, 'strict_mode': False})
+        self.time_parse_tool = TimeParseTool(
+            config={"include_source": True, "strict_mode": False}
+        )
 
-    async def enhance(self, query: str, user_context: Dict[str, Any] = None, conversation_context: str = "") -> List[Dict[str, Any]]:
+    async def enhance(
+        self,
+        query: str,
+        user_context: Dict[str, Any] = None,
+        conversation_context: str = "",
+    ) -> List[Dict[str, Any]]:
         """增强查询"""
-        monitor_task_status('query enhancer starting...')
         # enhanced_queries = [query]  # 始终包含原始查询
         if not user_context:
             user_context = {}
 
         # 基于专业水平改写
         user_expertise = user_context.get("user_expertise_level", "beginner")
-        if self.config.formalize and user_expertise != "beginner" and (task := self._formalize_rewrite_query_with_coref(query,conversation_context)):
-            self.task_map['formalize'] = task
+        if (
+            self.config.formalize
+            and user_expertise != "beginner"
+            and (
+                task := self._formalize_rewrite_query_with_coref(
+                    query, conversation_context
+                )
+            )
+        ):
+            self.task_map["formalize"] = task
 
         # 扩展改写
-        if self.config.expand and (task := self._expand_rewrite_query_with_coref(query,conversation_context)):
-            self.task_map['expand'] = task
+        if self.config.expand and (
+            task := self._expand_rewrite_query_with_coref(query, conversation_context)
+        ):
+            self.task_map["expand"] = task
 
         # 同义改写
-        if self.config.paraphrase and (task := self._paraphrase_rewrite_query_with_coref(query,conversation_context)):
-            self.task_map['paraphrase'] = task
+        if self.config.paraphrase and (
+            task := self._paraphrase_rewrite_query_with_coref(
+                query, conversation_context
+            )
+        ):
+            self.task_map["paraphrase"] = task
 
-        if self.config.enable_query_decomposition and (task := self._decompose_query_with_coref(query,conversation_context)):
-            self.task_map['decomposition'] = task
+        if self.config.enable_query_decomposition and (
+            task := self._decompose_query_with_coref(query, conversation_context)
+        ):
+            self.task_map["decomposition"] = task
 
-        if self.config.hyde_predict and (task := self._predict_query_with_context_enhanced(query,conversation_context)):
-            self.task_map['predict'] = task
+        if self.config.hyde_predict and (
+            task := self._predict_query_with_context_enhanced(
+                query, conversation_context
+            )
+        ):
+            self.task_map["predict"] = task
 
         # 并行执行所有增强任务
-        responses = await self.runnable_parallel({'query': query,'conversation_context': conversation_context})
+        responses = await self.runnable_parallel(
+            {"query": query, "conversation_context": conversation_context}
+        )
         enhanced_queries = self.parse_parallel_response(responses)
         # 去重
         enhanced_queries = self._deduplicate_queries(enhanced_queries)
         # 解析时间
         enhanced_timer_queries = self.parse_query_time(enhanced_queries)
         # 限制数量
-        enhanced_result = enhanced_timer_queries[:self.config.max_enhanced_queries]
-        monitor_task_status(f"Enhanced queries result: {enhanced_result}")
-        monitor_task_status('query enhancer ended...')
+        enhanced_result = enhanced_timer_queries[: self.config.max_enhanced_queries]
+        logger.info(
+            f"[QueryEnhancer] 查询增强完成: original_query={query}, enhanced_count={len(enhanced_result)}"
+        )
         return enhanced_result
 
-    def _paraphrase_rewrite_query_with_coref(self, query: str, conversation_context: str = "") -> RunnableSerializable:
+    def _paraphrase_rewrite_query_with_coref(
+        self, query: str, conversation_context: str = ""
+    ) -> RunnableSerializable:
         """基于对话上下文进行指代消解的同义改写"""
 
         if conversation_context:
@@ -110,9 +148,11 @@ class QueryEnhancer(ParallelChain):
             请用JSON数组格式回复改写后的查询，如：["查询1", "查询2"]
             """
 
-        return self.create_chain(prompt, parse='json', config={"llm_temperature": 0.2})
+        return self.create_chain(prompt, parse="json", config={"llm_temperature": 0.2})
 
-    def _expand_rewrite_query_with_coref(self, query: str, conversation_context: str = "") -> RunnableSerializable:
+    def _expand_rewrite_query_with_coref(
+        self, query: str, conversation_context: str = ""
+    ) -> RunnableSerializable:
         """基于对话上下文进行指代消解的扩展改写"""
 
         if conversation_context:
@@ -159,9 +199,11 @@ class QueryEnhancer(ParallelChain):
             "扩展后的完整查询"
             """
 
-        return self.create_chain(prompt, parse='str', config={"llm_temperature": 0.2})
+        return self.create_chain(prompt, parse="str", config={"llm_temperature": 0.2})
 
-    def _decompose_query_with_coref(self, query: str, conversation_context: str = "") -> Optional[RunnableSerializable]:
+    def _decompose_query_with_coref(
+        self, query: str, conversation_context: str = ""
+    ) -> Optional[RunnableSerializable]:
         """基于对话上下文进行指代消解的查询分解"""
 
         if conversation_context:
@@ -209,9 +251,11 @@ class QueryEnhancer(ParallelChain):
             ["子查询1", "子查询2"]
             """
 
-        return self.create_chain(prompt, parse='json')
+        return self.create_chain(prompt, parse="json")
 
-    def _formalize_rewrite_query_with_coref(self, query: str, conversation_context: str = "") -> RunnableSerializable:
+    def _formalize_rewrite_query_with_coref(
+        self, query: str, conversation_context: str = ""
+    ) -> RunnableSerializable:
         """基于对话上下文进行指代消解的专业化改写"""
 
         if conversation_context:
@@ -257,9 +301,11 @@ class QueryEnhancer(ParallelChain):
             "改写后的专业查询"
             """
 
-        return self.create_chain(prompt, parse='str', config={"llm_temperature": 0.2})
+        return self.create_chain(prompt, parse="str", config={"llm_temperature": 0.2})
 
-    def _predict_query_with_context_enhanced(self, query: str, conversation_context: str = "") -> RunnableSerializable:
+    def _predict_query_with_context_enhanced(
+        self, query: str, conversation_context: str = ""
+    ) -> RunnableSerializable:
         """增强版HyDE predict（考虑对话历史和指代消解）"""
 
         if conversation_context:
@@ -307,7 +353,7 @@ class QueryEnhancer(ParallelChain):
             "详细的回答草案..."
             """
 
-        return self.create_chain(prompt, parse='str', config={"llm_temperature": 0.2})
+        return self.create_chain(prompt, parse="str", config={"llm_temperature": 0.2})
 
     def _deduplicate_queries(self, queries: List[str]) -> List[str]:
         """去重查询"""
@@ -316,20 +362,22 @@ class QueryEnhancer(ParallelChain):
         for query in queries:
             normalized = query.lower().strip()
             # 移除标点符号
-            normalized = re.sub(r'[^\w\s\u4e00-\u9fa5]', '', normalized)
+            normalized = re.sub(r"[^\w\s\u4e00-\u9fa5]", "", normalized)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 unique_queries.append(query)
 
         return unique_queries
 
-    def parse_query_time(self,queries:List[str]) -> List[Dict[str, Any]]:
+    def parse_query_time(self, queries: List[str]) -> List[Dict[str, Any]]:
         result = []
         for query in queries:
-            time_span = self.time_parse_tool(query).get('time',[None,None])
-            result.append({
-                'query':query,
-                'start_time':time_span[0],
-                'end_time':time_span[1],
-            })
+            time_span = self.time_parse_tool(query).get("time", [None, None])
+            result.append(
+                {
+                    "query": query,
+                    "start_time": time_span[0],
+                    "end_time": time_span[1],
+                }
+            )
         return result

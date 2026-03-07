@@ -5,8 +5,10 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 from config import PostgreSQLConfig
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
 from utils.decorator import singleton
+
+logger = get_logger(__name__)
 
 
 def ensure_postgres_database_exists(config: PostgreSQLConfig = None):
@@ -26,14 +28,11 @@ def ensure_postgres_database_exists(config: PostgreSQLConfig = None):
         )
         if not cursor.fetchone():
             cursor.execute(f'CREATE DATABASE "{config.dbname}"')
-            monitor_task_status(f"PostgreSQL 数据库 '{config.dbname}' 不存在，已自动创建")
+            logger.info(f"[PostgreSQL] 数据库自动创建: {config.dbname}")
         cursor.close()
         conn.close()
     except Exception as error:
-        monitor_task_status(
-            f"检测/创建 PostgreSQL 数据库 '{config.dbname}' 失败: {error}",
-            level="WARNING",
-        )
+        logger.warning(f"[PostgreSQL] 数据库检测/创建失败: {error}")
 
 
 @singleton
@@ -182,13 +181,13 @@ class PostgreSQLConnector:
             collection.get('domain','default'),
             keywords_json
         ))
-        monitor_task_status(f"💾 Inserted/Updated collection: {collection['index']}")
+        logger.debug(f"[PostgreSQL] 知识库配置已更新: {collection.get('index', 'unknown')}")
 
     def delete_knowledge_collection(self, collection_name: str):
         """删除指定知识库配置"""
         sql = "DELETE FROM knowledge_collections WHERE collection_name = %s"
         self.execute(sql, (collection_name,))
-        monitor_task_status(f"🗑️ 已删除知识库配置: {collection_name}")
+        logger.info(f"[PostgreSQL] 知识库配置已删除: {collection_name}")
 
     def get_all_collections(self) -> List[Dict]:
         """从数据库读取所有知识库配置"""
@@ -202,7 +201,7 @@ class PostgreSQLConnector:
                 "keywords": row[3]
             })
 
-        monitor_task_status('从数据库读取的知识库配置:',result)
+        logger.debug(f"[PostgreSQL] 知识库配置读取完成: count={len(result)}")
         return result
 
     def close(self):

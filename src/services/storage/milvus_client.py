@@ -4,9 +4,10 @@ from langchain_milvus import Milvus, BM25BuiltInFunction
 from pymilvus import connections, db
 
 from config import MilvusConfig
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
 from src.services.llm.models import get_embedding_model
 
+logger = get_logger(__name__)
 
 _milvus_db_ensured = set()
 
@@ -29,14 +30,11 @@ def ensure_milvus_database_exists(config: MilvusConfig = None):
         existing_dbs = db.list_database(using=alias)
         if target_db not in existing_dbs:
             db.create_database(target_db, using=alias)
-            monitor_task_status(f"Milvus 数据库 '{target_db}' 不存在，已自动创建")
+            logger.info(f"[Milvus] 数据库自动创建: {target_db}")
         _milvus_db_ensured.add(target_db)
         connections.disconnect(alias)
     except Exception as error:
-        monitor_task_status(
-            f"检测/创建 Milvus 数据库 '{target_db}' 失败: {error}",
-            level="WARNING",
-        )
+        logger.warning(f"[Milvus] 数据库检测/创建失败: {error}")
 
 
 class MilvusExecutor:

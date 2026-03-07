@@ -5,7 +5,10 @@ from langchain_core.runnables import RunnableParallel, RunnableSerializable, Run
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables.utils import Input
 
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class ParallelChain:
@@ -16,22 +19,22 @@ class ParallelChain:
 
     async def runnable_parallel(self,input_:Input,config:RunnableConfig=None,**kwargs) -> Dict[str, Any]:
         """并行执行所有增强任务"""
-        monitor_task_status('parallel chain task starting...')
+        logger.debug(f"[ParallelChain] 开始并行执行: tasks_count={len(self.task_map)}")
         map_chain = RunnableParallel(self.task_map)
         responses = await map_chain.ainvoke(input_,config,**kwargs)
-        monitor_task_status('parallel chain task ended...')
+        logger.debug(f"[ParallelChain] 并行执行完成: responses_count={len(responses)}")
         return responses
 
     def parse_parallel_response(self,responses:Dict[str, Any]) -> List:
         result = []
         for part, response in responses.items():
-            monitor_task_status(f"【{part}】 chain response", response)
+            logger.debug(f"[ParallelChain] 任务响应: task={part}, response_type={type(response).__name__}")
             if isinstance(response, str):
                 result.append(response)
             elif isinstance(response, list):
                 result.extend(response)
             else:
-                monitor_task_status(f'无法解析的响应 type: {type(response)} 【{part}】 chain response',response)
+                logger.warning(f"[ParallelChain] 无法解析响应类型: task={part}, type={type(response).__name__}")
 
         return result
 

@@ -4,9 +4,10 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from config import MCP_SERVER
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
 from utils.decorator import singleton
 
+logger = get_logger(__name__)
 
 @singleton
 class ToolsPool:
@@ -24,9 +25,9 @@ class ToolsPool:
             self._load_system_default_tools()
             await self._load_mcp_tools()
             self.initialized = True
-            monitor_task_status('ToolsPool 初始化完成', f'已加载 {len(self.tools)} 个工具')
+            logger.info(f"[ToolsPool] 初始化完成: tools_count={len(self.tools)}")
         except Exception as exc:
-            monitor_task_status(f'ToolsPool 初始化失败: {exc}', level='ERROR')
+            logger.error(f"[ToolsPool] 初始化失败: {exc}")
         finally:
             self._initializing = False
 
@@ -44,17 +45,16 @@ class ToolsPool:
         for server in MCP_SERVER.keys():
             try:
                 tools = await client.get_tools(server_name=server)
-                monitor_task_status(f'MCP工具【{server}】已获取 {len(tools)} 个工具')
+                logger.info(f"[ToolsPool] MCP工具加载成功: server={server}, tools_count={len(tools)}")
                 for tool in tools:
                     self.add_tool(tool)
             except Exception as exc:
-                monitor_task_status(f'MCP工具【{server}】获取失败', exc)
-
+                logger.warning(f"[ToolsPool] MCP工具加载失败: server={server}, error={exc}")
 
     def add_tool(self, tool):
         """添加工具"""
         if isinstance(tool,BaseTool):
-            monitor_task_status('add tool',tool.name)
+            logger.debug(f"[ToolsPool] 添加工具: {tool.name}")
             self.tools[tool.name] = tool
 
     def get_tool(self,name) -> BaseTool:
@@ -70,16 +70,17 @@ class ToolsPool:
             await self.ensure_initialized()
         tool = self.get_tool(name)
         if not tool:
-            monitor_task_status('not exists tool', name)
+            logger.warning(f"[ToolsPool] 工具不存在: {name}")
             return None
         for _ in range(3):
             try:
                 if isinstance(tool, BaseTool):
                     result = await tool.ainvoke(tool_input, *args, **kwargs)
-                    monitor_task_status('call tool result', result)
+                    result_preview = str(result)[:200] if result else None
+                    logger.debug(f"[ToolsPool] 工具调用成功: tool={name}, result_preview={result_preview}")
                     return result
             except Exception as exc:
-                monitor_task_status(f'tool call error 【{name}】', exc)
+                logger.error(f"[ToolsPool] 工具调用失败: tool={name}, error={exc}")
         return None
 
     def get_format_tool(self) -> str:

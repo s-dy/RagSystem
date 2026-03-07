@@ -1,9 +1,32 @@
-from dataclasses import dataclass, field
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+@dataclass
+class LoggingConfig:
+    """日志配置"""
+
+    # 日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    # 日志文件目录
+    log_dir: str = os.getenv("LOG_DIR", "logs")
+    # 是否启用文件日志
+    enable_file_logging: bool = (
+        os.getenv("ENABLE_FILE_LOGGING", "true").lower() == "true"
+    )
+    # 是否启用控制台日志
+    enable_console_logging: bool = (
+        os.getenv("ENABLE_CONSOLE_LOGGING", "true").lower() == "true"
+    )
+    # 单个日志文件最大字节数（默认 10MB）
+    max_bytes: int = int(os.getenv("LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+    # 保留的备份文件数量
+    backup_count: int = int(os.getenv("LOG_BACKUP_COUNT", "5"))
+
 
 @dataclass
 class RagSystemConfig:
@@ -39,16 +62,17 @@ class RagSystemConfig:
 @dataclass
 class QueryEnhancementConfig:
     """查询增强配置"""
+
     # 同义改写提高召回
-    paraphrase:bool = False
+    paraphrase: bool = False
     # 基于专业水平改写
-    formalize:bool = False
+    formalize: bool = False
     # 扩展改写,扩展比较维度、步骤细节
-    expand:bool = False
+    expand: bool = False
     # 查询分解,分解多步子问题
     enable_query_decomposition: bool = False
     # HyDE predict 生成假设答案辅助检索
-    hyde_predict:bool = False
+    hyde_predict: bool = False
 
     # 性能限制
     max_enhanced_queries: int = 8
@@ -62,6 +86,7 @@ class MilvusConfig:
     db_name: str = os.getenv("MILVUS_DB_NAME", "hybridRagSystem")
     token: str = os.getenv("MILVUS_TOKEN", "root:Milvus")
 
+
 @dataclass
 class PostgreSQLConfig:
     host: str = os.getenv("POSTGRES_HOST", "localhost")
@@ -73,10 +98,10 @@ class PostgreSQLConfig:
 
 
 REDIS_URI = os.getenv("REDIS_URI", "redis://localhost:6379")
-os.environ['REDIS_URL'] = REDIS_URI
+os.environ["REDIS_URL"] = REDIS_URI
 
 POSTGRESQL_URL = f"postgresql://{PostgreSQLConfig.user}:{PostgreSQLConfig.password}@{PostgreSQLConfig.host}:{PostgreSQLConfig.port}/{PostgreSQLConfig.dbname}"
-os.environ['POSTGRESQL_URL'] = POSTGRESQL_URL
+os.environ["POSTGRESQL_URL"] = POSTGRESQL_URL
 
 # MCP服务
 MCP_SERVER = {

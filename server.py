@@ -9,14 +9,15 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 
-from src.graph import Graph
-from config import RagSystemConfig
 from src.core.exceptions import (
     HybridRagError,
     StorageError,
     MilvusConnectionError,
-    IngestError,
 )
+from src.graph import Graph
+from src.observability.logger import get_logger
+
+logger = get_logger(__name__)
 
 app = FastAPI(title="HybridRAG API")
 
@@ -37,6 +38,7 @@ async def hybrid_rag_error_handler(request: Request, exc: HybridRagError):
         status_code=status_code,
     )
 
+
 # 全局 Graph 实例
 rag_graph: Optional[Graph] = None
 
@@ -54,6 +56,7 @@ async def get_graph() -> Graph:
 
 # ─────────────────────────── 对话 API ───────────────────────────
 
+
 @app.post("/api/chat")
 async def chat(request: Request):
     """非流式对话接口"""
@@ -65,6 +68,10 @@ async def chat(request: Request):
 
     if not message.strip():
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
+
+    logger.info(
+        f"[Server] 非流式对话请求: thread_id={thread_id}, user_id={user_id}, message={message[:50]}..."
+    )
 
     graph = await get_graph()
     input_data = {"messages": [HumanMessage(content=message)]}
@@ -87,12 +94,16 @@ async def chat(request: Request):
             "messages": [],
         }
     conversations[thread_id]["messages"].append({"role": "user", "content": message})
-    conversations[thread_id]["messages"].append({"role": "assistant", "content": answer})
+    conversations[thread_id]["messages"].append(
+        {"role": "assistant", "content": answer}
+    )
 
-    return JSONResponse({
-        "answer": answer,
-        "thread_id": thread_id,
-    })
+    return JSONResponse(
+        {
+            "answer": answer,
+            "thread_id": thread_id,
+        }
+    )
 
 
 @app.post("/api/chat/stream")
@@ -140,6 +151,9 @@ async def chat_stream(request: Request):
                 async for event in graph.start_stream(input_data, config):
                     await queue.put(event)
             except Exception as exc:
+                logger.error(
+                    f"[Server] 流式对话异常: thread_id={thread_id}, error={exc}"
+                )
                 await queue.put({"type": "error", "content": str(exc)})
             finally:
                 await queue.put(None)  # 结束标记
@@ -185,10 +199,15 @@ async def chat_stream(request: Request):
 
                 elif event_type == "done":
                     # 记录助手回复
-                    conversations[thread_id]["messages"].append({
-                        "role": "assistant",
-                        "content": full_answer,
-                    })
+                    conversations[thread_id]["messages"].append(
+                        {
+                            "role": "assistant",
+                            "content": full_answer,
+                        }
+                    )
+                    logger.info(
+                        f"[Server] 流式对话完成: thread_id={thread_id}, answer_length={len(full_answer)}"
+                    )
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
                 elif event_type == "error":
@@ -217,16 +236,19 @@ async def chat_stream(request: Request):
 
 # ─────────────────────────── 会话管理 API ───────────────────────────
 
+
 @app.get("/api/conversations")
 async def list_conversations():
     """获取所有会话列表（按创建时间倒序）"""
     result = []
     for thread_id, conv in conversations.items():
-        result.append({
-            "id": conv["id"],
-            "title": conv.get("title", "新对话"),
-            "message_count": len(conv["messages"]),
-        })
+        result.append(
+            {
+                "id": conv["id"],
+                "title": conv.get("title", "新对话"),
+                "message_count": len(conv["messages"]),
+            }
+        )
     # 最新的会话排在前面
     result.reverse()
     return JSONResponse(result)
@@ -251,6 +273,7 @@ async def delete_conversation(thread_id: str):
 
 # ─────────────────────────── 知识库管理 API ───────────────────────────
 
+
 @app.get("/api/knowledge/collections")
 async def list_collections():
     """列出所有知识库集合"""
@@ -270,12 +293,15 @@ async def list_collections():
         collections_info = []
         for name in collection_names:
             from pymilvus import Collection
+
             coll = Collection(name)
             coll.flush()
-            collections_info.append({
-                "name": name,
-                "num_entities": coll.num_entities,
-            })
+            collections_info.append(
+                {
+                    "name": name,
+                    "num_entities": coll.num_entities,
+                }
+            )
         connections.disconnect("default")
         return JSONResponse(collections_info)
     except ConnectionError as conn_err:
@@ -307,10 +333,10 @@ async def delete_collection(collection_name: str):
         # 同步删除 PostgreSQL 中的知识库配置
         try:
             from src.services.storage import PostgreSQLConnector
+
             PostgreSQLConnector().delete_knowledge_collection(collection_name)
         except Exception as pg_err:
-            import logging
-            logging.warning(f"删除 PostgreSQL 知识库配置失败: {pg_err}")
+            logger.warning(f"[Server] 删除 PostgreSQL 知识库配置失败: {pg_err}")
 
         return JSONResponse({"ok": True})
     except ConnectionError as conn_err:
@@ -336,24 +362,54 @@ async def upload_document(
     """
     import os
     from urllib.parse import unquote
-    from src.services.data_load import DataDBStorage, IngestConfig
+    from src.services.data_load import IngestConfig
 
-    collection_name = request.query_params.get("collection_name", "default") if request else "default"
+    collection_name = (
+        request.query_params.get("collection_name", "default") if request else "default"
+    )
     collection_name = unquote(collection_name).strip()
     if not collection_name:
         collection_name = "default"
 
     # 读取 chunk 配置：优先使用请求参数，其次使用全局配置
-    global_chunk_config = getattr(app.state, "chunk_config", {"chunk_size": 500, "chunk_overlap": 50})
-    chunk_size = int(request.query_params.get("chunk_size", global_chunk_config["chunk_size"])) if request else global_chunk_config["chunk_size"]
-    chunk_overlap = int(request.query_params.get("chunk_overlap", global_chunk_config["chunk_overlap"])) if request else global_chunk_config["chunk_overlap"]
-    use_parent_child = request.query_params.get("use_parent_child", "false").lower() == "true" if request else False
+    global_chunk_config = getattr(
+        app.state, "chunk_config", {"chunk_size": 500, "chunk_overlap": 50}
+    )
+    chunk_size = (
+        int(request.query_params.get("chunk_size", global_chunk_config["chunk_size"]))
+        if request
+        else global_chunk_config["chunk_size"]
+    )
+    chunk_overlap = (
+        int(
+            request.query_params.get(
+                "chunk_overlap", global_chunk_config["chunk_overlap"]
+            )
+        )
+        if request
+        else global_chunk_config["chunk_overlap"]
+    )
+    use_parent_child = (
+        request.query_params.get("use_parent_child", "false").lower() == "true"
+        if request
+        else False
+    )
 
     # 知识库元数据（仅新建知识库时需要）
-    is_new_collection = request.query_params.get("is_new_collection", "false").lower() == "true" if request else False
-    collection_description = unquote(request.query_params.get("description", "")).strip() if request else ""
-    collection_domain = unquote(request.query_params.get("domain", "")).strip() if request else ""
-    collection_keywords_raw = unquote(request.query_params.get("keywords", "")).strip() if request else ""
+    is_new_collection = (
+        request.query_params.get("is_new_collection", "false").lower() == "true"
+        if request
+        else False
+    )
+    collection_description = (
+        unquote(request.query_params.get("description", "")).strip() if request else ""
+    )
+    collection_domain = (
+        unquote(request.query_params.get("domain", "")).strip() if request else ""
+    )
+    collection_keywords_raw = (
+        unquote(request.query_params.get("keywords", "")).strip() if request else ""
+    )
 
     upload_dir = os.path.join(os.path.dirname(__file__), "uploads", collection_name)
     os.makedirs(upload_dir, exist_ok=True)
@@ -364,11 +420,13 @@ async def upload_document(
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
-        saved_files.append({
-            "filename": file.filename,
-            "size": len(content),
-            "path": file_path,
-        })
+        saved_files.append(
+            {
+                "filename": file.filename,
+                "size": len(content),
+                "path": file_path,
+            }
+        )
 
     # 异步触发入库流程
     ingest_config = IngestConfig(
@@ -377,25 +435,38 @@ async def upload_document(
         chunk_overlap=chunk_overlap,
         use_parent_child=use_parent_child,
     )
-    collection_meta = {
-        "is_new": is_new_collection,
-        "description": collection_description,
-        "domain": collection_domain,
-        "keywords_raw": collection_keywords_raw,
-    } if is_new_collection else None
+    collection_meta = (
+        {
+            "is_new": is_new_collection,
+            "description": collection_description,
+            "domain": collection_domain,
+            "keywords_raw": collection_keywords_raw,
+        }
+        if is_new_collection
+        else None
+    )
+    logger.info(
+        f"[Server] 文档上传请求: collection={collection_name}, files_count={len(files)}"
+    )
     asyncio.create_task(_run_ingest(upload_dir, ingest_config, collection_meta))
 
-    return JSONResponse({
-        "message": f"成功上传 {len(saved_files)} 个文件到知识库「{collection_name}」，入库处理已启动",
-        "collection_name": collection_name,
-        "files": saved_files,
-        "ingest_status": "processing",
-        "chunk_config": {
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-            "use_parent_child": use_parent_child,
-        },
-    })
+    logger.info(
+        f"[Server] 文档上传完成: collection={collection_name}, saved_files={len(saved_files)}"
+    )
+
+    return JSONResponse(
+        {
+            "message": f"成功上传 {len(saved_files)} 个文件到知识库「{collection_name}」，入库处理已启动",
+            "collection_name": collection_name,
+            "files": saved_files,
+            "ingest_status": "processing",
+            "chunk_config": {
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+                "use_parent_child": use_parent_child,
+            },
+        }
+    )
 
 
 # 入库任务状态跟踪（内存版，按 collection_name 记录最近一次入库状态）
@@ -404,8 +475,11 @@ ingest_status_store: dict[str, dict] = {}
 
 async def _run_ingest(data_path: str, config, collection_meta: dict = None):
     """后台执行入库流程，更新状态到 ingest_status_store"""
-    from src.services.data_load import DataDBStorage, IngestConfig
+    from src.services.data_load import DataDBStorage
 
+    logger.info(
+        f"[Server] 开始入库任务: collection={config.collection_name}, path={data_path}"
+    )
     ingest_status_store[config.collection_name] = {
         "status": "processing",
         "message": "正在处理文档...",
@@ -419,46 +493,66 @@ async def _run_ingest(data_path: str, config, collection_meta: dict = None):
         if collection_meta and collection_meta.get("is_new"):
             try:
                 from src.services.storage import PostgreSQLConnector
+
                 keywords_raw = collection_meta.get("keywords_raw", "")
-                keywords_list = [k.strip() for k in keywords_raw.split(",") if k.strip()] if keywords_raw else []
-                PostgreSQLConnector().insert_knowledge_collection({
-                    "index": config.collection_name,
-                    "description": collection_meta.get("description") or f"知识库：{config.collection_name}",
-                    "domain": collection_meta.get("domain") or "general",
-                    "keywords": keywords_list,
-                })
+                keywords_list = (
+                    [k.strip() for k in keywords_raw.split(",") if k.strip()]
+                    if keywords_raw
+                    else []
+                )
+                PostgreSQLConnector().insert_knowledge_collection(
+                    {
+                        "index": config.collection_name,
+                        "description": collection_meta.get("description")
+                        or f"知识库：{config.collection_name}",
+                        "domain": collection_meta.get("domain") or "general",
+                        "keywords": keywords_list,
+                    }
+                )
             except Exception as pg_err:
-                import logging
-                logging.warning(f"写入知识库配置到 PostgreSQL 失败: {pg_err}")
+                logger.warning(f"[Server] 写入知识库配置失败: {pg_err}")
 
         ingest_status_store[config.collection_name] = {
             "status": "completed",
             "message": f"入库完成，共生成 {result.get('total_chunks', 0)} 个分块",
             "result": result,
         }
+        logger.info(
+            f"[Server] 入库任务完成: collection={config.collection_name}, total_chunks={result.get('total_chunks', 0)}"
+        )
     except StorageError as storage_err:
+        logger.error(
+            f"[Server] 入库失败(存储层): collection={config.collection_name}, error={storage_err}"
+        )
         ingest_status_store[config.collection_name] = {
             "status": "failed",
             "message": f"入库失败（存储层）: {storage_err}",
             "result": None,
         }
     except Exception as exc:
+        logger.error(
+            f"[Server] 入库失败: collection={config.collection_name}, error={exc}"
+        )
         ingest_status_store[config.collection_name] = {
             "status": "failed",
             "message": f"入库失败: {exc}",
             "result": None,
         }
 
+
 @app.get("/api/knowledge/ingest-status/{collection_name}")
 async def get_ingest_status(collection_name: str):
     """查询入库处理状态"""
     status = ingest_status_store.get(collection_name)
     if not status:
-        return JSONResponse({"status": "unknown", "message": "未找到该知识库的入库记录"})
+        return JSONResponse(
+            {"status": "unknown", "message": "未找到该知识库的入库记录"}
+        )
     return JSONResponse(status)
 
 
 # ─────────────────────────── 系统 API ───────────────────────────
+
 
 @app.get("/api/system/models")
 async def get_model_status():
@@ -467,7 +561,9 @@ async def get_model_status():
 
     llm_model = os.getenv("QWEN_MODEL_NAME", "未配置")
     llm_base_url = os.getenv("QWEN_BASE_URL", "")
-    llm_provider = "DashScope (通义千问)" if "dashscope" in llm_base_url else llm_base_url
+    llm_provider = (
+        "DashScope (通义千问)" if "dashscope" in llm_base_url else llm_base_url
+    )
 
     embedding_model = "qwen3-embedding:0.6B"
     embedding_provider = "Ollama (本地)"
@@ -475,23 +571,25 @@ async def get_model_status():
     reranker_model = "BAAI/bge-reranker-v2-m3"
     reranker_provider = "HuggingFace (本地)"
 
-    return JSONResponse({
-        "llm": {
-            "name": llm_model,
-            "provider": llm_provider,
-            "status": "online",
-        },
-        "embedding": {
-            "name": embedding_model,
-            "provider": embedding_provider,
-            "status": "online",
-        },
-        "reranker": {
-            "name": reranker_model,
-            "provider": reranker_provider,
-            "status": "online",
-        },
-    })
+    return JSONResponse(
+        {
+            "llm": {
+                "name": llm_model,
+                "provider": llm_provider,
+                "status": "online",
+            },
+            "embedding": {
+                "name": embedding_model,
+                "provider": embedding_provider,
+                "status": "online",
+            },
+            "reranker": {
+                "name": reranker_model,
+                "provider": reranker_provider,
+                "status": "online",
+            },
+        }
+    )
 
 
 @app.get("/api/knowledge/documents")
@@ -510,7 +608,8 @@ async def list_documents(collection_name: str = ""):
         target_dirs = [collection_name]
     else:
         target_dirs = [
-            entry for entry in os.listdir(uploads_root)
+            entry
+            for entry in os.listdir(uploads_root)
             if os.path.isdir(os.path.join(uploads_root, entry))
         ]
 
@@ -523,13 +622,17 @@ async def list_documents(collection_name: str = ""):
             if not os.path.isfile(file_path):
                 continue
             stat = os.stat(file_path)
-            documents.append({
-                "filename": filename,
-                "size": stat.st_size,
-                "collection_name": dir_name,
-                "upload_time": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                "status": "uploaded",
-            })
+            documents.append(
+                {
+                    "filename": filename,
+                    "size": stat.st_size,
+                    "collection_name": dir_name,
+                    "upload_time": datetime.fromtimestamp(stat.st_mtime).strftime(
+                        "%Y-%m-%d %H:%M"
+                    ),
+                    "status": "uploaded",
+                }
+            )
 
     documents.sort(key=lambda doc: doc["upload_time"], reverse=True)
     return JSONResponse(documents)
@@ -545,9 +648,13 @@ async def delete_document(request: Request):
     filename = body.get("filename", "")
 
     if not collection_name or not filename:
-        return JSONResponse({"error": "缺少 collection_name 或 filename"}, status_code=400)
+        return JSONResponse(
+            {"error": "缺少 collection_name 或 filename"}, status_code=400
+        )
 
-    file_path = os.path.join(os.path.dirname(__file__), "uploads", collection_name, filename)
+    file_path = os.path.join(
+        os.path.dirname(__file__), "uploads", collection_name, filename
+    )
 
     if not os.path.exists(file_path):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
@@ -571,20 +678,26 @@ async def save_chunk_config(request: Request):
         "chunk_overlap": chunk_overlap,
     }
 
-    return JSONResponse({
-        "ok": True,
-        "chunk_size": chunk_size,
-        "chunk_overlap": chunk_overlap,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        }
+    )
 
 
 @app.get("/api/knowledge/chunk-config")
 async def get_chunk_config():
     """获取当前分块配置"""
-    config = getattr(app.state, "chunk_config", {
-        "chunk_size": 500,
-        "chunk_overlap": 50,
-    })
+    config = getattr(
+        app.state,
+        "chunk_config",
+        {
+            "chunk_size": 500,
+            "chunk_overlap": 50,
+        },
+    )
     return JSONResponse(config)
 
 

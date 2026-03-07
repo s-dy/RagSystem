@@ -1,8 +1,11 @@
 from typing import Dict, List, Any, Tuple
+
 from langchain_core.language_models import BaseChatModel
 
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
 from utils.ParallelChain import ParallelChain
+
+logger = get_logger(__name__)
 
 
 class QueryRouter(ParallelChain):
@@ -26,25 +29,27 @@ class QueryRouter(ParallelChain):
                 formatted.append(prompt_str)
             return "\n".join(formatted)
         except Exception as e:
-            monitor_task_status(f"格式化知识库字典失败: {e}")
+            logger.error(f"[QueryRouter] 格式化知识库字典失败: {e}")
             return str(index_dict)
 
     async def multi_queries_index_router(
-            self,
-            queries: List[str],
-            index_dict: List[Dict],
-            external_tools:list=None,
-            top_k: int = 3
+        self,
+        queries: List[str],
+        index_dict: List[Dict],
+        external_tools: list = None,
+        top_k: int = 3,
     ) -> List[Tuple[str, List[Dict]]]:
         """
         并行路由所有查询到内部知识库或外部工具
         """
-        monitor_task_status(f"multi_index_router_queries", queries)
+        logger.debug(f"[QueryRouter] 开始路由, queries_count={len(queries)}")
 
         # 构建路由判断链
         for query in queries:
             messages = [
-                ('system', f"""你是一个智能路由助手，需判断用户查询应使用内部知识库还是外部工具。
+                (
+                    "system",
+                    f"""你是一个智能路由助手，需判断用户查询应使用内部知识库还是外部工具。
 
                 可用的内部知识库：
                 {{formatted_indices}}
@@ -74,24 +79,28 @@ class QueryRouter(ParallelChain):
                 ]
 
                 如果完全不相关，返回空数组 []。
-                """),
-                ('human', f'用户查询：{query}')
+                """,
+                ),
+                ("human", f"用户查询：{query}"),
             ]
-            self.task_map[query] = self.create_chain(messages,parse='json',config={'llm_temperature': self.temperature})
+            self.task_map[query] = self.create_chain(
+                messages, parse="json", config={"llm_temperature": self.temperature}
+            )
 
         formatted_indices = self._format_index_dict(index_dict)
-        responses = await self.runnable_parallel({'formatted_indices': formatted_indices,'external_tools': external_tools})
+        responses = await self.runnable_parallel(
+            {"formatted_indices": formatted_indices, "external_tools": external_tools}
+        )
         result = self.parse_parallel_response(responses)
         return result
 
     def parse_parallel_response(
-            self,
-            responses: Dict[str, Any]
+        self, responses: Dict[str, Any]
     ) -> List[Tuple[str, List[Dict]]]:
         results = []
         for key, response in responses.items():
             if not response:
-                monitor_task_status(f"multi_index_router_response_empty for query: {key}")
+                logger.warning(f"[QueryRouter] 路由响应为空: query={key}")
                 results.append((key, []))
                 continue
 
@@ -103,18 +112,14 @@ class QueryRouter(ParallelChain):
                 score = rec.get("score", 0.5)
                 if "index" not in rec:
                     continue
-                validated_rec = {
-                    "index": rec["index"],
-                    "score": score
-                }
+                validated_rec = {"index": rec["index"], "score": score}
                 validated_recommendations.append(validated_rec)
 
             # 按评分排序
             validated_recommendations.sort(key=lambda x: x["score"], reverse=True)
-            monitor_task_status(f"multi_index_router_completed", {
-                "recommendations_count": len(validated_recommendations),
-                "recommendations": validated_recommendations
-            })
+            logger.info(
+                f"[QueryRouter] 路由完成: query={key}, recommendations_count={len(validated_recommendations)}"
+            )
             results.append((key, validated_recommendations))
 
         return results
@@ -126,19 +131,22 @@ class QueryRouter(ParallelChain):
             for info in index_dict
             if info.get("index")
         ]
-        monitor_task_status("query_router_fallback", {
-            "reason": "LLM 路由失败或返回空结果，回退到全部知识库",
-            "fallback_indices": [r["index"] for r in fallback],
-        })
+        logger.warning(
+            f"[QueryRouter] 使用回退路由: reason=LLM路由失败, fallback_indices={[r['index'] for r in fallback]}"
+        )
         return fallback
 
-    async def multi_all_queries_index_router(self, queries: List[str], index_dict: List[Dict], top_k: int = 3) -> List[Dict]:
+    async def multi_all_queries_index_router(
+        self, queries: List[str], index_dict: List[Dict], top_k: int = 3
+    ) -> List[Dict]:
         """将所有query一次性使用一个llm完成路由，失败时回退到全部知识库"""
         try:
             unique_queries = list(set(queries))
             combined_query = "；\n\n".join(unique_queries)
             messages = [
-                ('system', f"""
+                (
+                    "system",
+                    f"""
                 你是一个智能路由助手，需判断用户查询应使用内部知识库还是外部工具。
 
                 可用的内部知识库：
@@ -158,23 +166,30 @@ class QueryRouter(ParallelChain):
                 ]
 
                 如果完全不相关，返回空数组 []。
-                """),
-                ('human', f'用户有多个相关查询：\n\n {combined_query} \n\n请为每个子查询分别路由')
+                """,
+                ),
+                (
+                    "human",
+                    f"用户有多个相关查询：\n\n {combined_query} \n\n请为每个子查询分别路由",
+                ),
             ]
-            self.task_map['all_queries'] = self.create_chain(messages, parse='json', config={'llm_temperature': 0})
+            self.task_map["all_queries"] = self.create_chain(
+                messages, parse="json", config={"llm_temperature": 0}
+            )
             formatted_indices = self._format_index_dict(index_dict)
             responses = await self.runnable_parallel(
-                {'formatted_indices': formatted_indices})
+                {"formatted_indices": formatted_indices}
+            )
             result = self.parse_parallel_response(responses)
             if result:
                 result = result[0][1]
 
             if not result:
-                monitor_task_status("LLM 路由返回空结果，触发回退", level="WARNING")
+                logger.warning("[QueryRouter] LLM路由返回空结果，触发回退")
                 return self._build_fallback_routes(index_dict)
 
             return result
 
         except Exception as error:
-            monitor_task_status(f"LLM 路由调用异常: {error}，触发回退", level="WARNING")
+            logger.warning(f"[QueryRouter] LLM路由异常: {error}")
             return self._build_fallback_routes(index_dict)

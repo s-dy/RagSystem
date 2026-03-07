@@ -1,14 +1,19 @@
-import logging
 from typing import List
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AnyMessage, HumanMessage, AIMessage, SystemMessage, RemoveMessage
+from langchain_core.messages import (
+    AnyMessage,
+    HumanMessage,
+    AIMessage,
+    SystemMessage,
+    RemoveMessage,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ============================================================
 # Prompt 模板
@@ -38,12 +43,15 @@ incremental_summary_prompt = """已有对话摘要：
 请将新增内容整合到已有摘要中，生成更新后的完整摘要。
 保留所有关键信息，去除冗余。确保上述关键事实在摘要中原样保留。"""
 
-context_summary_prompt = "请用 2-3 句话概括以下对话的要点，只保留关键事实和结论：\n\n{history}"
+context_summary_prompt = (
+    "请用 2-3 句话概括以下对话的要点，只保留关键事实和结论：\n\n{history}"
+)
 
 
 # ============================================================
 # Token 估算
 # ============================================================
+
 
 def estimate_token_count(text: str) -> int:
     """估算文本的 token 数（混合中英文场景，字符数 * 0.6 ≈ token 数）"""
@@ -66,7 +74,8 @@ def get_last_user_msg(messages: List[AnyMessage]):
     if not user_messages:
         return None
     last_msg = user_messages[-1].content
-    monitor_task_status('last human message', last_msg)
+    msg_preview = last_msg[:100] + "..." if len(last_msg) > 100 else last_msg
+    logger.debug(f"[MessageUtil] 获取最后用户消息: {msg_preview}")
     return last_msg
 
 
@@ -76,7 +85,9 @@ def get_conversation_context(messages: List[AnyMessage], num_messages: int = 3) 
         return ""
 
     # 获取最近的几条消息作为上下文
-    recent_messages = messages[-num_messages:] if len(messages) >= num_messages else messages
+    recent_messages = (
+        messages[-num_messages:] if len(messages) >= num_messages else messages
+    )
     context_parts = []
 
     for msg in recent_messages:
@@ -89,13 +100,15 @@ def get_conversation_context(messages: List[AnyMessage], num_messages: int = 3) 
         context_parts.append(f"{role}{msg.content}")
 
     context = "\n".join(context_parts)
-    monitor_task_status('conversation context', context)
+    context_preview = context[:200] + "..." if len(context) > 200 else context
+    logger.debug(f"[MessageUtil] 对话上下文: {context_preview}")
     return context
 
 
 # ============================================================
 # 策略 1：跨轮对话历史压缩
 # ============================================================
+
 
 async def compress_conversation_history(
     llm: BaseChatModel,
@@ -141,18 +154,19 @@ async def compress_conversation_history(
     if estimate_token_count(history_text) > max_compress_tokens:
         summary = await _batch_compress(llm, old_texts, max_compress_tokens)
     else:
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", conversation_compress_prompt),
-            ("human", "请压缩上述对话历史。")
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", conversation_compress_prompt),
+                ("human", "请压缩上述对话历史。"),
+            ]
+        )
         chain = prompt | llm | StrOutputParser()
         summary = await chain.ainvoke({"conversation_history": history_text})
 
     summary_message = SystemMessage(content=f"[对话历史摘要]\n{summary}")
-    monitor_task_status("conversation_compress", {
-        "original_count": len(old_messages),
-        "summary_length": len(summary),
-    })
+    logger.info(
+        f"[MessageUtil] 对话历史压缩完成: original_count={len(old_messages)}, summary_length={len(summary)}"
+    )
     return [summary_message] + recent_messages
 
 
@@ -183,10 +197,9 @@ async def _batch_compress(
     if current_batch:
         batches.append("\n".join(current_batch))
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", conversation_compress_prompt),
-        ("human", "请压缩上述对话历史。")
-    ])
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", conversation_compress_prompt), ("human", "请压缩上述对话历史。")]
+    )
     chain = prompt | llm | StrOutputParser()
 
     batch_summaries = []
@@ -206,6 +219,7 @@ async def _batch_compress(
 # ============================================================
 # 策略 2：对话上下文窗口自适应
 # ============================================================
+
 
 async def get_conversation_context_adaptive(
     messages: List[AnyMessage],
@@ -236,7 +250,10 @@ async def get_conversation_context_adaptive(
         role = "用户: " if isinstance(msg, HumanMessage) else "助手: "
         text = f"{role}{msg.content}"
 
-        if total_chars + len(text) > char_budget and len(retained_parts) >= min_messages:
+        if (
+            total_chars + len(text) > char_budget
+            and len(retained_parts) >= min_messages
+        ):
             cutoff_index = len(messages) - i
             break
         if len(retained_parts) >= max_messages:
@@ -250,7 +267,8 @@ async def get_conversation_context_adaptive(
 
     # 第二层：对预算外的更早消息，生成摘要补充
     earlier_messages = [
-        msg for msg in messages[:cutoff_index]
+        msg
+        for msg in messages[:cutoff_index]
         if isinstance(msg, (HumanMessage, AIMessage))
     ]
 
@@ -258,7 +276,8 @@ async def get_conversation_context_adaptive(
     if earlier_messages:
         # 检查是否有已压缩的 SystemMessage 摘要（策略 1 生成的），直接复用
         existing_summaries = [
-            msg.content for msg in messages[:cutoff_index]
+            msg.content
+            for msg in messages[:cutoff_index]
             if isinstance(msg, SystemMessage) and "[对话历史摘要]" in msg.content
         ]
         if existing_summaries:
@@ -279,16 +298,16 @@ async def get_conversation_context_adaptive(
             summary_prefix = f"[早期对话摘要] {summary}\n\n"
 
     context = summary_prefix + "\n".join(retained_parts)
-    monitor_task_status("adaptive_context", {
-        "retained_count": len(retained_parts),
-        "has_summary": bool(summary_prefix),
-    })
+    logger.info(
+        f"[MessageUtil] 自适应上下文提取完成: retained_count={len(retained_parts)}, has_summary={bool(summary_prefix)}"
+    )
     return context
 
 
 # ============================================================
 # 策略 6：渐进式摘要（Incremental Summarization）
 # ============================================================
+
 
 async def incremental_summarize_with_anchors(
     llm: BaseChatModel,
@@ -316,25 +335,29 @@ async def incremental_summarize_with_anchors(
     if not new_text.strip():
         return existing_summary or ""
 
-    anchors_text = "\n".join(f"- {fact}" for fact in anchor_facts) if anchor_facts else "（无）"
+    anchors_text = (
+        "\n".join(f"- {fact}" for fact in anchor_facts) if anchor_facts else "（无）"
+    )
 
     prompt = ChatPromptTemplate.from_template(incremental_summary_prompt)
     chain = prompt | llm | StrOutputParser()
-    updated_summary = await chain.ainvoke({
-        "existing_summary": existing_summary or "（无）",
-        "new_messages": new_text,
-        "anchor_facts": anchors_text,
-    })
+    updated_summary = await chain.ainvoke(
+        {
+            "existing_summary": existing_summary or "（无）",
+            "new_messages": new_text,
+            "anchor_facts": anchors_text,
+        }
+    )
 
-    monitor_task_status("incremental_summarize", {
-        "new_messages_count": len(new_messages),
-        "anchor_facts_count": len(anchor_facts) if anchor_facts else 0,
-        "summary_length": len(updated_summary),
-    })
+    logger.info(
+        f"[MessageUtil] 增量摘要完成: new_messages_count={len(new_messages)}, anchor_facts_count={len(anchor_facts) if anchor_facts else 0}, summary_length={len(updated_summary)}"
+    )
     return updated_summary
 
 
-def should_trigger_incremental_summary(messages: List[AnyMessage], interval: int = 5) -> bool:
+def should_trigger_incremental_summary(
+    messages: List[AnyMessage], interval: int = 5
+) -> bool:
     """判断是否应触发渐进式摘要（每隔 interval 轮触发一次）"""
     human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
     return human_count > 0 and human_count % interval == 0
@@ -352,5 +375,9 @@ def build_remove_and_replace_messages(
     1. 对所有旧消息生成 RemoveMessage(id=msg.id) 删除指令
     2. 将压缩后的消息作为新消息追加
     """
-    remove_ops = [RemoveMessage(id=msg.id) for msg in original_messages if hasattr(msg, 'id') and msg.id]
+    remove_ops = [
+        RemoveMessage(id=msg.id)
+        for msg in original_messages
+        if hasattr(msg, "id") and msg.id
+    ]
     return remove_ops + compressed_messages

@@ -2,9 +2,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
 from src.services.storage import PostgreSQLConnector, MilvusExecutor, MilvusConfig
 
+
+logger = get_logger(__name__)
 
 @dataclass
 class RetrievedDoc:
@@ -43,10 +45,12 @@ class FusionRetrieve:
                     source=source,
                     score=float(score),
                 ))
-            monitor_task_status(f"搜索查询 【{query}】: 【{len(retrieved_docs)} 条结果】")
+                query_preview = query[:50] + "..." if len(query) > 50 else query
+                logger.debug(f"[FusionRetrieve] 单查询检索完成: query={query_preview}, docs_count={len(retrieved_docs)}")
             return retrieved_docs
         except Exception as e:
-            monitor_task_status(f"搜索查询 \'{query}\' 时发生错误: {e}", level='ERROR')
+            query_preview = query[:50] + "..." if len(query) > 50 else query
+            logger.error(f"[FusionRetrieve] 单查询检索失败: query={query_preview}, error={e}")
             return []
 
     async def _resolve_parent_documents_structured(self, search_results: List[Tuple]) -> List[RetrievedDoc]:
@@ -100,11 +104,13 @@ class FusionRetrieve:
         valid_results = []
         for query, result in zip(queries, results_list):
             if isinstance(result, Exception):
-                monitor_task_status(f"查询 \'{query}\' 检索异常: {result}", level='ERROR')
+                query_preview = query[:50] + "..." if len(query) > 50 else query
+                logger.error(f"[FusionRetrieve] 查询检索异常: query={query_preview}, error={result}")
                 valid_results.append([])
             else:
                 valid_results.append(result)
-        monitor_task_status('Queries Search Results', f"{sum(len(r) for r in valid_results)} docs total")
+        total_docs = sum(len(r) for r in valid_results)
+        logger.info(f"[FusionRetrieve] 批量检索完成: queries_count={len(queries)}, total_docs={total_docs}")
         return valid_results
 
 

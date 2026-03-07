@@ -1,10 +1,11 @@
-import os
-import json
 import asyncio
+import json
+import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 from utils.environ import set_huggingface_hf_env
+
 set_huggingface_hf_env()
 
 from dotenv import load_dotenv
@@ -18,7 +19,9 @@ from ragas.metrics.collections import (
     ContextRecall,
 )
 
-from src.observability.logger import monitor_task_status
+from src.observability.logger import get_logger
+
+logger = get_logger(__name__)
 
 load_dotenv()
 
@@ -26,25 +29,28 @@ load_dotenv()
 @dataclass
 class EvalSample:
     """单条评估样本"""
-    user_input: str # 用户输入
-    response: str # LLM 回答
-    retrieved_contexts: list[str] # 检索到的上下文
-    reference: Optional[str] = None # 参考答案
+
+    user_input: str  # 用户输入
+    response: str  # LLM 回答
+    retrieved_contexts: list[str]  # 检索到的上下文
+    reference: Optional[str] = None  # 参考答案
 
 
 @dataclass
 class EvalScores:
     """单条样本的评估分数"""
-    faithfulness: Optional[float] = None # 忠实度
-    answer_relevancy: Optional[float] = None # 答案相关性
-    context_relevance: Optional[float] = None # 上下文相关性
-    context_recall: Optional[float] = None # 上下文召回率
+
+    faithfulness: Optional[float] = None  # 忠实度
+    answer_relevancy: Optional[float] = None  # 答案相关性
+    context_relevance: Optional[float] = None  # 上下文相关性
+    context_recall: Optional[float] = None  # 上下文召回率
 
 
 @dataclass
 class EvalReport:
     """批量评估报告"""
-    sample_count: int = 0 # 样本数量
+
+    sample_count: int = 0  # 样本数量
     avg_faithfulness: Optional[float] = None
     avg_answer_relevancy: Optional[float] = None
     avg_context_relevance: Optional[float] = None
@@ -60,13 +66,15 @@ class RagEvaluator:
             api_key=os.getenv("QWEN_API_KEY"),
             base_url=os.getenv("QWEN_BASE_URL"),
         )
-        self.llm = llm_factory(model=os.getenv('QWEN_MODEL_NAME'), client=client)
+        self.llm = llm_factory(model=os.getenv("QWEN_MODEL_NAME"), client=client)
         self.embeddings = HuggingFaceEmbeddings(
             model="BAAI/bge-large-zh-v1.5",
         )
 
         self._faithfulness = Faithfulness(llm=self.llm)
-        self._answer_relevancy = AnswerRelevancy(llm=self.llm, embeddings=self.embeddings)
+        self._answer_relevancy = AnswerRelevancy(
+            llm=self.llm, embeddings=self.embeddings
+        )
         self._context_relevance = ContextRelevance(llm=self.llm)
         self._context_recall = ContextRecall(llm=self.llm)
 
@@ -139,7 +147,7 @@ class RagEvaluator:
 
         for name, result in zip(metric_names, results):
             if isinstance(result, Exception):
-                monitor_task_status(f"评估指标 {name} 失败: {result}", level="WARNING")
+                logger.warning(f"[RagEvaluator] 评估指标 {name} 失败: {result}")
                 setattr(scores, name, None)
             else:
                 setattr(scores, name, result)
@@ -152,27 +160,45 @@ class RagEvaluator:
         all_scores: list[EvalScores] = []
 
         for index, sample in enumerate(samples):
-            monitor_task_status(f"评估样本 {index + 1}/{len(samples)}: {sample.user_input[:50]}...")
+            logger.info(
+                f"[RagEvaluator] 评估样本 {index + 1}/{len(samples)}: {sample.user_input[:50]}..."
+            )
             scores = await self.evaluate_sample(sample)
             all_scores.append(scores)
-            report.details.append({
-                "user_input": sample.user_input,
-                "scores": asdict(scores),
-            })
+            report.details.append(
+                {
+                    "user_input": sample.user_input,
+                    "scores": asdict(scores),
+                }
+            )
 
-        valid_faithfulness = [s.faithfulness for s in all_scores if s.faithfulness is not None]
-        valid_answer_relevancy = [s.answer_relevancy for s in all_scores if s.answer_relevancy is not None]
-        valid_context_relevance = [s.context_relevance for s in all_scores if s.context_relevance is not None]
-        valid_context_recall = [s.context_recall for s in all_scores if s.context_recall is not None]
+        valid_faithfulness = [
+            s.faithfulness for s in all_scores if s.faithfulness is not None
+        ]
+        valid_answer_relevancy = [
+            s.answer_relevancy for s in all_scores if s.answer_relevancy is not None
+        ]
+        valid_context_relevance = [
+            s.context_relevance for s in all_scores if s.context_relevance is not None
+        ]
+        valid_context_recall = [
+            s.context_recall for s in all_scores if s.context_recall is not None
+        ]
 
         if valid_faithfulness:
             report.avg_faithfulness = sum(valid_faithfulness) / len(valid_faithfulness)
         if valid_answer_relevancy:
-            report.avg_answer_relevancy = sum(valid_answer_relevancy) / len(valid_answer_relevancy)
+            report.avg_answer_relevancy = sum(valid_answer_relevancy) / len(
+                valid_answer_relevancy
+            )
         if valid_context_relevance:
-            report.avg_context_relevance = sum(valid_context_relevance) / len(valid_context_relevance)
+            report.avg_context_relevance = sum(valid_context_relevance) / len(
+                valid_context_relevance
+            )
         if valid_context_recall:
-            report.avg_context_recall = sum(valid_context_recall) / len(valid_context_recall)
+            report.avg_context_recall = sum(valid_context_recall) / len(
+                valid_context_recall
+            )
 
         return report
 
