@@ -33,7 +33,7 @@ class FusionRetrieve:
             # filtered = [(doc, score) for doc, score in result if score >= 0.2]
 
             if self.use_parent_child:
-                return await self._resolve_parent_documents_structured(filtered)
+                return await self._resolve_parent_documents_structured(result)
 
             retrieved_docs = []
             for doc, score in result:

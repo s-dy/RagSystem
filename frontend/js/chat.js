@@ -182,6 +182,12 @@ async function streamChat(message) {
                         throttledRender();
                         break;
 
+                    case 'retrieval_progress':
+                        // 检索进度展示
+                        updateRetrievalProgress(reasoningArea, event);
+                        scrollToBottom();
+                        break;
+
                     case 'decomposition':
                         if (event.sub_questions && event.sub_questions.length > 0) {
                             // 立即渲染子问题分解到推理过程区域
@@ -386,6 +392,71 @@ function bindReasoningToggle(container) {
             content.classList.toggle('expanded');
         });
     });
+}
+
+// 实时更新检索进度展示
+function updateRetrievalProgress(reasoningArea, event) {
+    let progressBlock = reasoningArea.querySelector('.retrieval-progress-block');
+
+    if (!progressBlock) {
+        progressBlock = document.createElement('div');
+        progressBlock.className = 'reasoning-block retrieval-progress-block';
+        progressBlock.innerHTML = `
+            <button class="reasoning-header expanded" data-bound="true">
+                <span class="arrow" style="transform: rotate(90deg);">▶</span>
+                🔍 检索进度
+            </button>
+            <div class="reasoning-content expanded">
+                <div class="retrieval-steps"></div>
+            </div>
+        `;
+        const header = progressBlock.querySelector('.reasoning-header');
+        header.addEventListener('click', () => {
+            header.classList.toggle('expanded');
+            const content = header.nextElementSibling;
+            content.classList.toggle('expanded');
+        });
+        reasoningArea.appendChild(progressBlock);
+    }
+
+    const stepsContainer = progressBlock.querySelector('.retrieval-steps');
+    const stage = event.stage;
+    const message = event.message || '';
+
+    // 根据阶段选择图标
+    const stageIcons = {
+        'start': '🚀',
+        'internal_done': '📚',
+        'dedup_done': '🔄',
+        'done': '✅',
+    };
+    const icon = stageIcons[stage] || '📌';
+
+    // 追加进度步骤
+    const stepDiv = document.createElement('div');
+    stepDiv.className = 'retrieval-step';
+    stepDiv.style.cssText = 'padding: 4px 0; font-size: 13px; color: var(--text-secondary);';
+
+    let stepContent = `${icon} ${escapeHtml(message)}`;
+    if (stage === 'done' && event.avg_score) {
+        stepContent += ` <span style="color: var(--text-muted); font-size: 12px;">(平均置信度: ${event.avg_score})</span>`;
+    }
+    if (stage === 'start' && event.collections && event.collections.length > 0) {
+        stepContent += ` <span style="color: var(--text-muted); font-size: 12px;">[${event.collections.join(', ')}]</span>`;
+    }
+    stepDiv.innerHTML = stepContent;
+    stepsContainer.appendChild(stepDiv);
+
+    // 完成时自动折叠
+    if (stage === 'done') {
+        const header = progressBlock.querySelector('.reasoning-header');
+        const content = progressBlock.querySelector('.reasoning-content');
+        setTimeout(() => {
+            header.classList.remove('expanded');
+            content.classList.remove('expanded');
+            header.querySelector('.arrow').style.transform = '';
+        }, 1500);
+    }
 }
 
 // 实时更新推理过程展示（每收到一个 sub_answer 就更新）

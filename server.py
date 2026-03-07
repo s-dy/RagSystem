@@ -176,6 +176,9 @@ async def chat_stream(request: Request):
                 elif event_type == "sub_answer":
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
+                elif event_type == "retrieval_progress":
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
                 elif event_type == "final_answer":
                     full_answer = event.get("answer", full_answer)
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

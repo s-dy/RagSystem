@@ -80,7 +80,7 @@ def _build_answer_chain(llm: BaseChatModel, is_final: bool):
         ("system", system_prompt),
         ("human", "{query}")
     ])
-    return prompt | llm | StrOutputParser()
+    return prompt | llm.with_config(tags=["stream_to_user"]) | StrOutputParser()
 
 
 def _build_answer_params(
@@ -134,7 +134,7 @@ async def synthesize_final_subs(llm, query, reasoning_context):
         ("system", synthesize_system_prompt),
         ("human", "{query}")
     ])
-    chain = prompt | llm | StrOutputParser()
+    chain = prompt | llm.with_config(tags=["stream_to_user"]) | StrOutputParser()
     return await chain.ainvoke({
         "reasoning_context": reasoning_context,
         "query": query,
@@ -147,7 +147,7 @@ async def generate_direct_chat_answer(llm: BaseChatModel, query: str, conversati
         ("system", direct_chat_system_prompt),
         ("human", "{query}")
     ])
-    chain = prompt | llm | StrOutputParser()
+    chain = prompt | llm.with_config(tags=["stream_to_user"]) | StrOutputParser()
     return await chain.ainvoke({
         "query": query,
         "conversation_context": conversation_context,

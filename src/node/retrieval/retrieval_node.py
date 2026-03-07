@@ -16,6 +16,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
 
+from langgraph.types import StreamWriter
+
 from .fusion_retrieve import FusionRetrieve, RetrievedDoc
 from src.services.task_analyzer import TaskCharacteristics, TaskType
 from src.core.exceptions import InternalRetrievalError, ExternalSearchError
@@ -121,12 +123,21 @@ class RetrievalNodeMixin:
 
         return external_docs
 
-    async def __fusion_retrieve(self, state, config: RunnableConfig, store: BaseStore) -> dict:
+    async def __fusion_retrieve(self, state, config: RunnableConfig, store: BaseStore, writer: StreamWriter) -> dict:
         """融合检索节点：支持来源编号和置信度分数"""
         monitor_task_status("---FUSION RETRIEVAL---")
         task_characteristics = state.get('task_characteristics') or TaskCharacteristics(
             task_type=TaskType.FACT_RETRIEVAL, requires_external_tools=False
         )
+
+        # 发送检索开始事件
+        collection_names = list(state['router_index'].keys()) if state.get('router_index') else []
+        writer({
+            "type": "retrieval_progress",
+            "stage": "start",
+            "message": f"正在检索 {len(collection_names)} 个知识库...",
+            "collections": collection_names,
+        })
 
         # 内部检索（返回 RetrievedDoc 列表）
         internal_docs = await self.__retrieve_internal(state['router_index'])
@@ -217,6 +228,16 @@ class RetrievalNodeMixin:
             content = ""
             retrieved_docs_text = []
             ordered_docs = []
+
+        # 发送检索完成事件
+        avg_score = sum(rerank_scores) / len(rerank_scores) if rerank_scores else 0
+        writer({
+            "type": "retrieval_progress",
+            "stage": "done",
+            "message": f"检索完成，找到 {len(ordered_docs)} 条文档",
+            "doc_count": len(ordered_docs),
+            "avg_score": round(avg_score, 3),
+        })
 
         monitor_task_status("final_retrieval", {
             "unique_docs_count": len(unique_retrieved),

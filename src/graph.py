@@ -104,7 +104,6 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             monitor_task_status(f"推理失败：{e}")
             raise
         finally:
-            # 清理数据库连接上下文
             if ctx:
                 conn_ctx, store_ctx = ctx
                 await store_ctx.__aexit__(None, None, None)
@@ -123,76 +122,80 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         """
         graph, ctx = await self._compile_graph()
 
+        # 是否为多跳场景（用于控制 token 展示策略）
+        is_multi_hop = False
+
         try:
-            async for event in graph.astream_events(input_data, config, version="v2"):
-                # 检查当前任务是否已被取消（前端中断时 server 会 cancel 此任务）
+            # 使用 astream 并设置 stream_mode 实现逐 token 流式
+            async for event_chunk in graph.astream(
+                    input_data,
+                    config,
+                    stream_mode=["messages", "updates", "custom"]
+            ):
+                # 检查当前任务是否已被取消
                 current_task = asyncio.current_task()
                 if current_task and current_task.cancelled():
                     monitor_task_status("流式推理被前端中断，停止生成", level="WARNING")
                     break
 
-                event_kind = event.get("event", "")
+                # 处理不同类型的流式输出
+                if isinstance(event_chunk, tuple) and len(event_chunk) == 2:
+                    mode, chunk = event_chunk
 
-                # LLM 逐 token 流式输出
-                # 只允许 synthesize（最终合成答案）和 final 节点的 token 流式展示
-                # generate_current_answer 的 token 不流式展示，因为：
-                #   - 子问题答案通过 sub_answer 事件展示
-                #   - 最终答案通过 final_answer 事件展示
-                #   - 多跳时该节点被多次调用，token 会混在一起
-                if event_kind == "on_chat_model_stream":
-                    node_name = event.get("metadata", {}).get("langgraph_node", "")
-                    if node_name not in ("synthesize", "final"):
-                        continue
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk and hasattr(chunk, "content") and chunk.content:
-                        yield {
-                            "type": "token",
-                            "content": chunk.content,
-                            "node": node_name,
-                        }
+                    if mode == "messages":
+                        # 逐 token 流式输出
+                        msg_chunk, metadata = chunk
+                        node_name = metadata.get("langgraph_node", "")
 
-                # 节点执行完成事件
-                elif event_kind == "on_chain_end" and event.get("name") in (
-                    "retrieve_or_respond", "prepare_next_step", "generate_current_answer", "synthesize", "final"
-                ):
-                    output = event.get("data", {}).get("output", {})
-                    node_name = event.get("name", "")
+                        # 只处理 LLM 流式 token（AIMessageChunk），过滤掉节点返回的完整 AIMessage
+                        from langchain_core.messages import AIMessageChunk
+                        if not isinstance(msg_chunk, AIMessageChunk):
+                            continue
 
-                    # 直接回复（不需要检索时，retrieve_or_respond 直接返回答案）
-                    if node_name == "retrieve_or_respond":
-                        # astream_events v2 中 output 可能是 {node_name: {...}} 或直接 {...}
-                        node_output = output.get("retrieve_or_respond", output)
-                        if not node_output.get("need_retrieval") and node_output.get("answer"):
+                        # Token 展示策略：通过 tags 精确区分核心生成 vs 辅助调用
+                        # 核心生成函数的 chain 带有 tags=["stream_to_user"]，辅助调用不带
+                        # 多跳场景下，子问题的 token 不展示（由 is_multi_hop 控制）
+                        chunk_tags = metadata.get("tags", [])
+                        should_stream = "stream_to_user" in chunk_tags
+                        if should_stream and node_name == "generate_current_answer" and is_multi_hop:
+                            should_stream = False
+
+                        if should_stream and msg_chunk.content:
                             yield {
-                                "type": "final_answer",
-                                "answer": node_output["answer"],
+                                "type": "token",
+                                "content": msg_chunk.content,
+                                "node": node_name,
                             }
 
-                    # 子问题分解可视化
-                    if node_name == "prepare_next_step" and output.get("reasoning_steps"):
-                        yield {
-                            "type": "decomposition",
-                            "sub_questions": output["reasoning_steps"][0].get("sub_questions", []),
-                        }
+                    elif mode == "custom":
+                        # 自定义流事件（检索进度）
+                        if isinstance(chunk, dict) and chunk.get("type"):
+                            yield chunk
 
-                    # 子问题中间答案
-                    if node_name == "generate_current_answer" and output.get("reasoning_steps"):
-                        latest_step = output["reasoning_steps"][-1]
-                        if not latest_step.get("is_final"):
-                            yield {
-                                "type": "sub_answer",
-                                "sub_question": latest_step.get("sub_question", ""),
-                                "answer": latest_step.get("answer", ""),
-                            }
+                    elif mode == "updates":
+                        # 节点更新事件
+                        for node_name, node_output in chunk.items():
+                            # 子问题分解可视化
+                            if node_name == "prepare_next_step":
+                                reasoning_steps = node_output.get("reasoning_steps", [])
+                                if reasoning_steps and reasoning_steps[0].get("sub_questions"):
+                                    is_multi_hop = True
+                                    yield {
+                                        "type": "decomposition",
+                                        "sub_questions": reasoning_steps[0]["sub_questions"],
+                                    }
 
-                    # 最终答案
-                    if output.get("answer") and node_name in ("generate_current_answer", "synthesize"):
-                        reasoning_steps = output.get("reasoning_steps", [])
-                        if not reasoning_steps or reasoning_steps[-1].get("is_final"):
-                            yield {
-                                "type": "final_answer",
-                                "answer": output["answer"],
-                            }
+                            # 子问题中间答案 / 单跳最终答案
+                            elif node_name == "generate_current_answer":
+                                reasoning_steps = node_output.get("reasoning_steps", [])
+                                if reasoning_steps:
+                                    latest_step = reasoning_steps[-1]
+                                    if is_multi_hop and not latest_step.get("is_final"):
+                                        yield {
+                                            "type": "sub_answer",
+                                            "sub_question": latest_step.get("sub_question", ""),
+                                            "answer": latest_step.get("answer", ""),
+                                        }
 
             # 流结束标记
             yield {"type": "done"}
@@ -201,7 +204,6 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             monitor_task_status("流式推理任务被取消，正在清理资源", level="WARNING")
             raise
         finally:
-            # 清理数据库连接上下文
             if ctx:
                 conn_ctx, store_ctx = ctx
                 await store_ctx.__aexit__(None, None, None)
