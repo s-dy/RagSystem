@@ -11,7 +11,7 @@ logger.remove()
 
 # 获取当前文件所在目录
 current_file_path = Path(__file__).resolve()
-monitor_dir = current_file_path.parent  # monitor文件夹路径
+monitor_dir = current_file_path.parent.parent.parent
 
 #  在monitor文件夹下创建logs目录
 log_dir = monitor_dir / "logs"

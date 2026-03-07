@@ -175,19 +175,20 @@ class PostgreSQLConnector:
             keywords = EXCLUDED.keywords
         """
         # 将 keywords 列表转为 JSON 字符串
-        keywords_json = json.dumps(collection['keywords'], ensure_ascii=False)
+        keywords_json = json.dumps(collection.get('keywords',[]), ensure_ascii=False)
         self.execute(sql, (
-            collection['index'],
-            collection['description'],
-            collection['domain'],
+            collection.get('index','default'),
+            collection.get('description','null'),
+            collection.get('domain','default'),
             keywords_json
         ))
-        print(f"💾 Inserted/Updated collection: {collection['index']}")
+        monitor_task_status(f"💾 Inserted/Updated collection: {collection['index']}")
 
-    def insert_all_collections(self, collections: List[Dict]):
-        """批量插入所有知识库配置"""
-        for col in collections:
-            self.insert_knowledge_collection(col)
+    def delete_knowledge_collection(self, collection_name: str):
+        """删除指定知识库配置"""
+        sql = "DELETE FROM knowledge_collections WHERE collection_name = %s"
+        self.execute(sql, (collection_name,))
+        monitor_task_status(f"🗑️ 已删除知识库配置: {collection_name}")
 
     def get_all_collections(self) -> List[Dict]:
         """从数据库读取所有知识库配置"""
@@ -206,41 +207,3 @@ class PostgreSQLConnector:
 
     def close(self):
         self.pool.close()
-
-
-if __name__ == '__main__':
-    # 1. 定义知识库配置（你的原始数据）
-    KNOWLEDGE_CONFIGS = [
-        {
-            "index": "hybridRag_news",
-            "description": "新闻文章集合",
-            "domain": "news",
-            "keywords": ["科技", "生活", "社会"]
-        },
-        # {
-        #     "index": "cybersecurity",
-        #     "description": "网络安全知识库，涵盖攻击防护、加密技术、安全协议等",
-        #     "domain": "technology",
-        #     "keywords": ["安全", "黑客", "加密", "漏洞"]
-        # },
-        # {
-        #     "index": "medical",
-        #     "description": "医学健康知识库，包含疾病症状、治疗方法、药物信息",
-        #     "domain": "medical",
-        #     "keywords": ["疾病", "治疗", "药物", "健康"]
-        # }
-    ]
-
-    # 2. 初始化数据库
-    db = PostgreSQLConnector()
-    # 3. 创建表
-    # db.create_knowledge_table()
-    # 4. 写入配置
-    # db.insert_all_collections(KNOWLEDGE_CONFIGS)
-
-    # 5. 验证读取
-    print("\n📚 从数据库读取的知识库配置:")
-    configs_from_db = db.get_all_collections()
-    print(configs_from_db)
-
-    db.close()

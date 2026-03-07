@@ -268,6 +268,7 @@ async def list_collections():
         for name in collection_names:
             from pymilvus import Collection
             coll = Collection(name)
+            coll.flush()
             collections_info.append({
                 "name": name,
                 "num_entities": coll.num_entities,
@@ -299,6 +300,15 @@ async def delete_collection(collection_name: str):
         )
         utility.drop_collection(collection_name)
         connections.disconnect("default")
+
+        # 同步删除 PostgreSQL 中的知识库配置
+        try:
+            from src.services.storage import PostgreSQLConnector
+            PostgreSQLConnector().delete_knowledge_collection(collection_name)
+        except Exception as pg_err:
+            import logging
+            logging.warning(f"删除 PostgreSQL 知识库配置失败: {pg_err}")
+
         return JSONResponse({"ok": True})
     except ConnectionError as conn_err:
         raise MilvusConnectionError("无法连接 Milvus 服务", cause=conn_err)
@@ -336,6 +346,12 @@ async def upload_document(
     chunk_overlap = int(request.query_params.get("chunk_overlap", global_chunk_config["chunk_overlap"])) if request else global_chunk_config["chunk_overlap"]
     use_parent_child = request.query_params.get("use_parent_child", "false").lower() == "true" if request else False
 
+    # 知识库元数据（仅新建知识库时需要）
+    is_new_collection = request.query_params.get("is_new_collection", "false").lower() == "true" if request else False
+    collection_description = unquote(request.query_params.get("description", "")).strip() if request else ""
+    collection_domain = unquote(request.query_params.get("domain", "")).strip() if request else ""
+    collection_keywords_raw = unquote(request.query_params.get("keywords", "")).strip() if request else ""
+
     upload_dir = os.path.join(os.path.dirname(__file__), "uploads", collection_name)
     os.makedirs(upload_dir, exist_ok=True)
 
@@ -358,7 +374,13 @@ async def upload_document(
         chunk_overlap=chunk_overlap,
         use_parent_child=use_parent_child,
     )
-    asyncio.create_task(_run_ingest(upload_dir, ingest_config))
+    collection_meta = {
+        "is_new": is_new_collection,
+        "description": collection_description,
+        "domain": collection_domain,
+        "keywords_raw": collection_keywords_raw,
+    } if is_new_collection else None
+    asyncio.create_task(_run_ingest(upload_dir, ingest_config, collection_meta))
 
     return JSONResponse({
         "message": f"成功上传 {len(saved_files)} 个文件到知识库「{collection_name}」，入库处理已启动",
@@ -377,7 +399,7 @@ async def upload_document(
 ingest_status_store: dict[str, dict] = {}
 
 
-async def _run_ingest(data_path: str, config):
+async def _run_ingest(data_path: str, config, collection_meta: dict = None):
     """后台执行入库流程，更新状态到 ingest_status_store"""
     from src.services.data_load import DataDBStorage, IngestConfig
 
@@ -389,6 +411,23 @@ async def _run_ingest(data_path: str, config):
     try:
         storage = DataDBStorage(collection_name=config.collection_name)
         result = await storage.ingest(config, data_path)
+
+        # 仅新建知识库时，将配置写入 PostgreSQL（用于查询路由）
+        if collection_meta and collection_meta.get("is_new"):
+            try:
+                from src.services.storage import PostgreSQLConnector
+                keywords_raw = collection_meta.get("keywords_raw", "")
+                keywords_list = [k.strip() for k in keywords_raw.split(",") if k.strip()] if keywords_raw else []
+                PostgreSQLConnector().insert_knowledge_collection({
+                    "index": config.collection_name,
+                    "description": collection_meta.get("description") or f"知识库：{config.collection_name}",
+                    "domain": collection_meta.get("domain") or "general",
+                    "keywords": keywords_list,
+                })
+            except Exception as pg_err:
+                import logging
+                logging.warning(f"写入知识库配置到 PostgreSQL 失败: {pg_err}")
+
         ingest_status_store[config.collection_name] = {
             "status": "completed",
             "message": f"入库完成，共生成 {result.get('total_chunks', 0)} 个分块",
@@ -406,53 +445,6 @@ async def _run_ingest(data_path: str, config):
             "message": f"入库失败: {exc}",
             "result": None,
         }
-
-
-@app.post("/api/knowledge/ingest")
-async def ingest_documents(request: Request):
-    """手动触发文档入库流程
-
-    请求体：
-    - collection_name: 知识库名称（必填）
-    - chunk_size: 分块大小（可选，默认 500）
-    - chunk_overlap: 分块重叠（可选，默认 50）
-    - use_parent_child: 是否使用父子文档策略（可选，默认 false）
-    """
-    import os
-    from src.services.data_load import IngestConfig
-
-    body = await request.json()
-    collection_name = body.get("collection_name", "").strip()
-    if not collection_name:
-        return JSONResponse({"error": "collection_name 不能为空"}, status_code=400)
-
-    upload_dir = os.path.join(os.path.dirname(__file__), "uploads", collection_name)
-    if not os.path.isdir(upload_dir):
-        return JSONResponse({"error": f"知识库「{collection_name}」的上传目录不存在，请先上传文件"}, status_code=404)
-
-    global_chunk_config = getattr(app.state, "chunk_config", {"chunk_size": 500, "chunk_overlap": 50})
-    chunk_size = int(body.get("chunk_size", global_chunk_config["chunk_size"]))
-    chunk_overlap = int(body.get("chunk_overlap", global_chunk_config["chunk_overlap"]))
-    use_parent_child = bool(body.get("use_parent_child", False))
-
-    ingest_config = IngestConfig(
-        collection_name=collection_name,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        use_parent_child=use_parent_child,
-    )
-    asyncio.create_task(_run_ingest(upload_dir, ingest_config))
-
-    return JSONResponse({
-        "message": f"知识库「{collection_name}」入库处理已启动",
-        "collection_name": collection_name,
-        "chunk_config": {
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-            "use_parent_child": use_parent_child,
-        },
-    })
-
 
 @app.get("/api/knowledge/ingest-status/{collection_name}")
 async def get_ingest_status(collection_name: str):

@@ -119,39 +119,62 @@ class QueryRouter(ParallelChain):
 
         return results
 
-    async def multi_all_queries_index_router(self,queries:List[str],index_dict:List[Dict],top_k:int=3) -> List[Dict]:
-        """将所有query一次性使用一个llm完成路由"""
-        unique_queries = list(set(queries))
-        combined_query = "；\n\n".join(unique_queries)
-        messages = [
-            ('system', f"""
-            你是一个智能路由助手，需判断用户查询应使用内部知识库还是外部工具。
-
-            可用的内部知识库：
-            {{formatted_indices}}
-
-            判断规则：
-            1. 只返回最终结果，不反回其他无关内容。
-            2. 从内部知识库中选择最相关的（最多{top_k}个）
-            3. 严格按照可用的知识库进行选择，不要编造。
-
-            输出格式（JSON数组）：
-            [
-              {{{{
-                "index": "knowledge_base_name",
-                "score": 0.0-1.0
-              }}}}
-            ]
-
-            如果完全不相关，返回空数组 []。
-            """),
-            ('human', f'用户有多个相关查询：\n\n {combined_query} \n\n请为每个子查询分别路由')
+    def _build_fallback_routes(self, index_dict: List[Dict]) -> List[Dict]:
+        """构建回退路由：返回所有知识库，用于 LLM 路由失败时兜底"""
+        fallback = [
+            {"index": info.get("index", ""), "score": 0.5}
+            for info in index_dict
+            if info.get("index")
         ]
-        self.task_map['all_queries'] = self.create_chain(messages,parse='json',config={'llm_temperature': 0})
-        formatted_indices = self._format_index_dict(index_dict)
-        responses = await self.runnable_parallel(
-            {'formatted_indices': formatted_indices})
-        result = self.parse_parallel_response(responses)
-        if result:
-            result = result[0][1]
-        return result
+        monitor_task_status("query_router_fallback", {
+            "reason": "LLM 路由失败或返回空结果，回退到全部知识库",
+            "fallback_indices": [r["index"] for r in fallback],
+        })
+        return fallback
+
+    async def multi_all_queries_index_router(self, queries: List[str], index_dict: List[Dict], top_k: int = 3) -> List[Dict]:
+        """将所有query一次性使用一个llm完成路由，失败时回退到全部知识库"""
+        try:
+            unique_queries = list(set(queries))
+            combined_query = "；\n\n".join(unique_queries)
+            messages = [
+                ('system', f"""
+                你是一个智能路由助手，需判断用户查询应使用内部知识库还是外部工具。
+
+                可用的内部知识库：
+                {{formatted_indices}}
+
+                判断规则：
+                1. 只返回最终结果，不反回其他无关内容。
+                2. 从内部知识库中选择最相关的（最多{top_k}个）
+                3. 严格按照可用的知识库进行选择，不要编造。
+
+                输出格式（JSON数组）：
+                [
+                  {{{{
+                    "index": "knowledge_base_name",
+                    "score": 0.0-1.0
+                  }}}}
+                ]
+
+                如果完全不相关，返回空数组 []。
+                """),
+                ('human', f'用户有多个相关查询：\n\n {combined_query} \n\n请为每个子查询分别路由')
+            ]
+            self.task_map['all_queries'] = self.create_chain(messages, parse='json', config={'llm_temperature': 0})
+            formatted_indices = self._format_index_dict(index_dict)
+            responses = await self.runnable_parallel(
+                {'formatted_indices': formatted_indices})
+            result = self.parse_parallel_response(responses)
+            if result:
+                result = result[0][1]
+
+            if not result:
+                monitor_task_status("LLM 路由返回空结果，触发回退", level="WARNING")
+                return self._build_fallback_routes(index_dict)
+
+            return result
+
+        except Exception as error:
+            monitor_task_status(f"LLM 路由调用异常: {error}，触发回退", level="WARNING")
+            return self._build_fallback_routes(index_dict)

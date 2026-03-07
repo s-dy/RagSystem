@@ -200,13 +200,31 @@ class RouteNodeMixin:
         # 查询路由
         monitor_task_status("---QUERY ROUTING---")
         queries = [_['query'] for _ in enhanced_result]
-        query_route = QueryRouter(self.llm)
         knowledge_bases = await asyncio.to_thread(PostgreSQLConnector().get_all_collections)
-        route_result = await query_route.multi_all_queries_index_router(queries, knowledge_bases)
+
         internal_routes = {}
-        for route in route_result:
-            idx = route["index"]
-            internal_routes[idx] = queries
+        if not knowledge_bases:
+            # 知识库配置为空，跳过 LLM 路由，使用默认 collection 兜底
+            from config import MilvusConfig
+            default_collection = MilvusConfig.collection_name
+            internal_routes[default_collection] = queries
+            monitor_task_status("知识库配置为空，跳过路由，使用默认 collection", {
+                "default_collection": default_collection,
+            }, level="WARNING")
+        else:
+            query_route = QueryRouter(self.llm)
+            route_result = await query_route.multi_all_queries_index_router(queries, knowledge_bases)
+            for route in route_result:
+                idx = route["index"]
+                internal_routes[idx] = queries
+
+            # 最终兜底：LLM 路由结果仍为空时，使用所有知识库
+            if not internal_routes:
+                monitor_task_status("路由结果为空，最终兜底到全部知识库", level="WARNING")
+                for kb in knowledge_bases:
+                    kb_index = kb.get("index", "")
+                    if kb_index:
+                        internal_routes[kb_index] = queries
 
         result = {'router_index': internal_routes}
         if not state.get("current_sub_question"):  # 只有主问题才更新 run_count

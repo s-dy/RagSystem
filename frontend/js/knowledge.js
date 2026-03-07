@@ -970,6 +970,11 @@ function showUploadModal(files) {
 function closeUploadModal() {
     document.getElementById('upload-modal-overlay').classList.add('hidden');
     pendingUploadFiles = null;
+    // 清空元数据字段并隐藏
+    document.getElementById('upload-collection-description').value = '';
+    document.getElementById('upload-collection-domain').value = '';
+    document.getElementById('upload-collection-keywords').value = '';
+    document.getElementById('upload-collection-meta').classList.add('hidden');
 }
 
 function getSelectedCollectionName() {
@@ -996,18 +1001,22 @@ function initUploadModal() {
         }
     });
 
-    // 下拉选择变化时：清空新建输入框，更新按钮状态
+    // 下拉选择变化时：清空新建输入框，隐藏元数据字段，更新按钮状态
     document.getElementById('upload-collection-select').addEventListener('change', (event) => {
         if (event.target.value) {
             document.getElementById('upload-collection-new').value = '';
+            document.getElementById('upload-collection-meta').classList.add('hidden');
         }
         updateUploadConfirmState();
     });
 
-    // 新建输入框变化时：清空下拉选择，更新按钮状态
+    // 新建输入框变化时：清空下拉选择，显示元数据字段，更新按钮状态
     document.getElementById('upload-collection-new').addEventListener('input', (event) => {
         if (event.target.value.trim()) {
             document.getElementById('upload-collection-select').value = '';
+            document.getElementById('upload-collection-meta').classList.remove('hidden');
+        } else {
+            document.getElementById('upload-collection-meta').classList.add('hidden');
         }
         updateUploadConfirmState();
     });
@@ -1017,17 +1026,26 @@ function initUploadModal() {
         const collectionName = getSelectedCollectionName();
         if (!collectionName || !pendingUploadFiles) return;
 
+        // 判断是否为新建知识库，并收集元数据
+        const isNewCollection = !!document.getElementById('upload-collection-new').value.trim();
+        const collectionMeta = {
+            is_new: isNewCollection,
+            description: document.getElementById('upload-collection-description').value.trim(),
+            domain: document.getElementById('upload-collection-domain').value.trim(),
+            keywords: document.getElementById('upload-collection-keywords').value.trim(),
+        };
+
         // 先保存文件引用，因为 closeUploadModal 会将 pendingUploadFiles 置为 null
         const filesToUpload = pendingUploadFiles;
         closeUploadModal();
-        uploadFiles(filesToUpload, collectionName);
+        uploadFiles(filesToUpload, collectionName, collectionMeta);
     });
 }
 
 // 在 initKnowledgeEvents 之外初始化（弹窗在 body 层级，不依赖页面切换）
 document.addEventListener('DOMContentLoaded', initUploadModal);
 
-async function uploadFiles(files, collectionName) {
+async function uploadFiles(files, collectionName, collectionMeta = {}) {
     const validFiles = Array.from(files);
 
     // 显示上传进度 UI
@@ -1068,7 +1086,19 @@ async function uploadFiles(files, collectionName) {
         formData.append('files', file);
     }
 
-    const uploadUrl = `${API.upload}?collection_name=${encodeURIComponent(collectionName)}`;
+    let uploadUrl = `${API.upload}?collection_name=${encodeURIComponent(collectionName)}`;
+    if (collectionMeta.is_new) {
+        uploadUrl += '&is_new_collection=true';
+        if (collectionMeta.description) {
+            uploadUrl += `&description=${encodeURIComponent(collectionMeta.description)}`;
+        }
+        if (collectionMeta.domain) {
+            uploadUrl += `&domain=${encodeURIComponent(collectionMeta.domain)}`;
+        }
+        if (collectionMeta.keywords) {
+            uploadUrl += `&keywords=${encodeURIComponent(collectionMeta.keywords)}`;
+        }
+    }
 
     try {
         const response = await fetch(uploadUrl, {
