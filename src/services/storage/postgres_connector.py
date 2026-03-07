@@ -62,6 +62,14 @@ class PostgreSQLConnector:
             kwargs={"autocommit": config.autocommit},
         )
 
+        # 确保必要的表结构存在
+        self._ensure_tables()
+
+    def _ensure_tables(self):
+        """确保必要的表结构存在，在初始化时自动调用"""
+        self.create_knowledge_table()
+        self.create_parent_documents_table()
+
     def execute(self, query: str, params=None):
         """从连接池获取连接执行查询，连接自动归还"""
         with self.pool.connection() as conn:
@@ -104,7 +112,6 @@ class PostgreSQLConnector:
         """
         if not parent_store:
             return
-        self.create_parent_documents_table()
         sql = """
         INSERT INTO parent_documents (parent_id, content, metadata)
         VALUES (%s, %s, %s)
