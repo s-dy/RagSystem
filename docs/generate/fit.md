@@ -101,6 +101,33 @@ async def generate_answer_for_query_stream(
 - 前端通过 SSE（Server-Sent Events）或 WebSocket 接收流式 token
 - 保留 `ainvoke()` 版本作为非流式降级方案
 
+**Token 过滤机制（基于 tags 精确区分）**：
+
+LangGraph 的 `astream(stream_mode=["messages"])` 会捕获所有节点内通过 LLM 实例产生的 `AIMessageChunk`。为了精确区分**核心生成调用**（token 需要展示）和**辅助性调用**（token 不展示），采用 LangGraph 官方推荐的 **tags 标记机制**：
+
+```python
+# 核心生成函数：chain 加上 tags=["stream_to_user"]
+chain = prompt | llm.with_config(tags=["stream_to_user"]) | StrOutputParser()
+
+# 辅助性函数：不加 tag
+chain = prompt | llm | StrOutputParser()
+```
+
+`start_stream` 中通过 `metadata["tags"]` 过滤：
+
+```python
+chunk_tags = metadata.get("tags", [])
+should_stream = "stream_to_user" in chunk_tags
+# 多跳子问题的 token 不展示
+if should_stream and node_name == "generate_current_answer" and is_multi_hop:
+    should_stream = False
+```
+
+**优势**：
+- 使用同一个 `self.llm` 实例，Langfuse 可完整追踪一条 trace
+- 精确过滤，即使同一节点内有多次 LLM 调用也能区分
+- 不需要创建额外的 LLM 实例
+
 **预期收益**：用户在生成开始后即可看到逐字输出，首字延迟从数秒降至毫秒级。
 
 ---

@@ -87,14 +87,47 @@ END
 | `error` | 异常捕获 | `{"type":"error","content":"错误信息"}` | 后端处理异常 |
 | `done` | 流结束 | `{"type":"done"}` | 标记整个流式响应结束 |
 
-**token 白名单过滤规则**：
+**token 白名单过滤规则（基于 tags 精确区分）**：
 
-`on_chat_model_stream` 事件中，只有 `langgraph_node` 为 `synthesize` 或 `final` 的 token 才会被 yield。其他节点（`retrieve_or_respond`、`prepare_next_step`、`enhance_and_route_current`、`generate_current_answer`）的 LLM token 全部被过滤，原因如下：
+LangGraph 的 `astream(stream_mode=["messages"])` 会捕获所有节点内通过 LLM 实例产生的 `AIMessageChunk`。为了精确区分**核心生成调用**（token 需要展示）和**辅助性调用**（token 不展示），采用 LangGraph 官方推荐的 **tags 标记机制**：
 
-- `retrieve_or_respond`：LLM 输出是结构化判断（`NEED_RETRIEVAL[...]` 或直接回复），不应展示中间判断过程
-- `prepare_next_step`：LLM 输出是子问题分解的结构化数据
-- `enhance_and_route_current`：LLM 输出是查询增强的结构化数据
-- `generate_current_answer`：多跳时该节点被多次调用（每个子问题一次），如果放行 token，所有子问题的答案 token 会混在一起拼接到前端的 `fullContent` 中
+```python
+# 核心生成函数：chain 加上 tags=["stream_to_user"]
+chain = prompt | llm.with_config(tags=["stream_to_user"]) | StrOutputParser()
+
+# 辅助性函数：不加 tag
+chain = prompt | llm | StrOutputParser()
+```
+
+`start_stream` 中通过 `metadata["tags"]` 过滤：
+
+```python
+chunk_tags = metadata.get("tags", [])
+should_stream = "stream_to_user" in chunk_tags
+# 多跳子问题的 token 不展示
+if should_stream and node_name == "generate_current_answer" and is_multi_hop:
+    should_stream = False
+```
+
+**核心生成 vs 辅助性调用分类**：
+
+| 函数 | 所在节点 | 是否加 tag | 说明 |
+|------|----------|:----------:|------|
+| `_build_answer_chain` → `generate_answer_for_query` | `generate_current_answer` | ✅ | 单跳/多跳答案生成 |
+| `synthesize_final_subs` | `synthesize` | ✅ | 多跳合成答案 |
+| `generate_direct_chat_answer` | `final` | ✅ | 不需要检索时的直接回复 |
+| `compress_reasoning_context` | `generate_current_answer` | ❌ | reasoning_context 压缩 |
+| `compress_conversation_history` | `retrieve_or_respond` | ❌ | 跨轮对话压缩 |
+| `get_conversation_context_adaptive` | 多个节点 | ❌ | 对话上下文自适应提取 |
+| `incremental_summarize_with_anchors` | `retrieve_or_respond` | ❌ | 渐进式摘要 |
+| `check_need_retrieval` | `retrieve_or_respond` | ❌ | 是否需要检索判断 |
+| `QueryEnhancer` | `prepare_next_step` / `enhance_and_route_current` | ❌ | 查询增强 |
+| `QueryRouter` | `enhance_and_route_current` | ❌ | 查询路由 |
+
+**优势**：
+- 使用同一个 `self.llm` 实例，Langfuse 可完整追踪一条 trace
+- 精确过滤，即使同一节点内有多次 LLM 调用也能区分
+- 不需要创建额外的 LLM 实例
 
 ---
 
