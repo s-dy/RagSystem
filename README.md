@@ -1,123 +1,362 @@
-# 解决的问题
+# HybridRAG - 混合检索增强生成系统
 
-- 知识的局限性。大模型自身的知识完全源于训练数据，主流大模型对一些实时性的、非公开的数据是没有的。
-- 幻觉问题。在大模型不具备的知识或者不擅长的任务场景时会胡编乱造。
-- 数据安全性。
+一个基于 LangGraph 构建的高性能 RAG（Retrieval-Augmented Generation）系统，支持多策略检索、查询增强、对话记忆和流式响应。
 
+## ✨ 核心特性
 
+- **🔍 混合检索策略**：结合向量检索、BM25 关键词检索和外部搜索，实现高召回率
+- **🚀 查询增强**：支持查询扩展、分解、重写和 HyDE 预测，并行化处理显著降低延迟
+- **📊 RAG-Fusion**：多路检索结果融合，加权 RRF 重排序
+- **🧠 对话记忆**：支持长对话压缩、用户画像、渐进式摘要
+- **⚡ 流式响应**：SSE 实时推送生成进度，支持心跳保活
+- **📝 结构化日志**：JSON 格式日志 + 请求 ID 追踪，便于问题定位
+- **🔧 多知识库管理**：支持创建、删除、切换多个知识库
 
-# 系统架构图
-![img.png](assets/rag架构图.png)
+## 🏗️ 系统架构
 
-## 查询增强
-
-使用langchain的LCEL表达式，将多个增强任务构造为RunnableSerializable，使用RunnableParallel并行化执行增强任务，可以显著减少消耗时间。
-
-test model: deepseek-v3.1
-
-同步请求时，平均一个请求耗时 4s 。
-
-```text
-2026-01-08 16:33:27.107 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] query enhancer starting...: "None"
-2026-01-08 16:33:39.162 | INFO     | src.monitoring.logger:monitor_task_status:25 - [logger.py] __main__.test_serialization: "12.0545"
-2026-01-08 16:33:39.162 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] enhancer 【expand】 chain response: "{'result': '比较迪士尼动画电影《疯狂动物城》中的角色兔子警官朱迪·霍普斯（Judy Hopps）与现实生活中被誉为‘最美护士’的医疗工作者在人物形象、职业特性、社会意义以及文化象征方面的异同点', 'reason': '原始查询存在歧义性：‘最美护士’可能指代现实中的模范医护工作者（如疫情期间受表彰者）或特定影视角色。扩展后明确比较维度（形象/职业/社会意义），并区分虚构角色与现实人物，同时保留‘最美护士’的宽泛性以涵盖多种可能性，从而提高信息检索的精准度'}"
-2026-01-08 16:33:39.163 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] enhancer 【decomposition】 chain response: "['查询兔子警官的相关信息', '查询最美护士的相关信息', '对比分析兔子警官和最美护士的相似之处', '对比分析兔子警官和最美护士的不同之处']"
-2026-01-08 16:33:39.163 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] enhancer 【predict】 chain response: "兔子警官（朱迪·霍普斯）和最美护士（通常指现实中的医护工作者或特定角色）的对比：  \n- **职业领域**：兔子警官属于动画虚构的执法职业（《疯狂动物城》），代表正义与勇气；最美护士属于现实中的医疗行业，象征奉献与关爱。  \n- **形象特点**：朱迪警官乐观坚韧，突破偏见；护士通常以专业、耐心、救死扶伤的形象被赞誉。  \n- **社会意义**：两者均为正能量符号，但兔子警官侧重梦想与平等，护士突出现实中的职业精神与人文关怀。  \n\n（注：若“最美护士”指特定角色或事件，需具体分析。）"
-2026-01-08 16:33:39.240 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] Enhanced queries result: [{'query': '对比兔子警官和最美护士', 'start_time': None, 'end_time': None}, {'query': '比较迪士尼动画电影《疯狂动物城》中的角色兔子警官朱迪·霍普斯（Judy Hopps）与现实生活中被誉为‘最美护士’的医疗工作者在人物形象、职业特性、社会意义以及文化象征方面的异同点', 'start_time': None, 'end_time': None}, {'query': '查询兔子警官的相关信息', 'start_time': None, 'end_time': None}, {'query': '查询最美护士的相关信息', 'start_time': None, 'end_time': None}, {'query': '对比分析兔子警官和最美护士的相似之处', 'start_time': None, 'end_time': None}, {'query': '对比分析兔子警官和最美护士的不同之处', 'start_time': None, 'end_time': None}, {'query': '兔子警官（朱迪·霍普斯）和最美护士（通常指现实中的医护工作者或特定角色）的对比：  \n- **职业领域**：兔子警官属于动画虚构的执法职业（《疯狂动物城》），代表正义与勇气；最美护士属于现实中的医疗行业，象征奉献与关爱。  \n- **形象特点**：朱迪警官乐观坚韧，突破偏见；护士通常以专业、耐心、救死扶伤的形象被赞誉。  \n- **社会意义**：两者均为正能量符号，但兔子警官侧重梦想与平等，护士突出现实中的职业精神与人文关怀。  \n\n（注：若“最美护士”指特定角色或事件，需具体分析。）', 'start_time': None, 'end_time': None}]: "None"
-2026-01-08 16:33:39.240 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] query enhancer ended...: "None"
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         用户请求                                 │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      TaskAdapter（任务适配）                     │
+│              分析查询意图，选择合适的处理流程                      │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      QueryEnhancer（查询增强）                   │
+│    ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│    │ 同义改写  │  │ 查询扩展  │  │ 查询分解  │  │ HyDE预测  │      │
+│    └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
+│                    RunnableParallel 并行执行                      │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        Router（智能路由）                        │
+│              基于 LLM 语义理解，选择检索策略                       │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                ┌───────────────┼───────────────┐
+                ▼               ▼               ▼
+        ┌───────────┐   ┌───────────┐   ┌───────────┐
+        │ 向量检索   │   │ BM25检索  │   │ 外部搜索   │
+        │ (Milvus)  │   │ (全文)    │   │ (Bing)    │
+        └───────────┘   └───────────┘   └───────────┘
+                │               │               │
+                └───────────────┼───────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    RAG-Fusion（结果融合）                        │
+│              加权 RRF 重排序，CrossEncoder 精排                   │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Generator（答案生成）                       │
+│              基于 LangGraph 状态机，支持流式输出                   │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Memory（对话记忆）                          │
+│         对话历史压缩 │ 用户画像 │ 渐进式摘要                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-并行化后，平均一个请求耗时 1 ~ 1.5s
+## 🚀 快速开始
 
-```text
-2026-01-08 16:49:12.884 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] query enhancer starting...: "None"
-2026-01-08 16:49:12.885 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] query chain task starting...: "None"
-2026-01-08 16:49:15.684 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] query chain task ended...: "None"
-2026-01-08 16:49:15.685 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] enhancer 【expand】 chain response: "对比动画电影《疯狂动物城》中的兔子警官朱迪·霍普斯（Judy Hopps）与现实生活中被媒体称为\"最美护士\"的人物（如疫情期间受到广泛报道的医护人员）在角色定位、社会贡献、公众形象及文化象征意义方面的异同点。"
-2026-01-08 16:49:15.685 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] enhancer 【decomposition】 chain response: "['查询兔子警官的相关信息', '查询最美护士的相关信息', '对比兔子警官和最美护士的特征或属性']"
-2026-01-08 16:49:15.685 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] enhancer 【predict】 chain response: "兔子警官和最美护士都是积极正面的角色形象，但定位不同：兔子警官通常代表正义、勇敢的执法者形象（如《疯狂动物城》的朱迪），侧重维护社会秩序；最美护士则象征医疗行业的奉献与仁爱，体现人文关怀。两者分别凸显了纪律责任感与医疗温暖的特质，均为社会正能量符号。"
-2026-01-08 16:49:15.762 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] Enhanced queries result: [{'query': '对比兔子警官和最美护士', 'start_time': None, 'end_time': None}, {'query': '对比动画电影《疯狂动物城》中的兔子警官朱迪·霍普斯（Judy Hopps）与现实生活中被媒体称为"最美护士"的人物（如疫情期间受到广泛报道的医护人员）在角色定位、社会贡献、公众形象及文化象征意义方面的异同点。', 'start_time': None, 'end_time': None}, {'query': '查询兔子警官的相关信息', 'start_time': None, 'end_time': None}, {'query': '查询最美护士的相关信息', 'start_time': None, 'end_time': None}, {'query': '对比兔子警官和最美护士的特征或属性', 'start_time': None, 'end_time': None}, {'query': '兔子警官和最美护士都是积极正面的角色形象，但定位不同：兔子警官通常代表正义、勇敢的执法者形象（如《疯狂动物城》的朱迪），侧重维护社会秩序；最美护士则象征医疗行业的奉献与仁爱，体现人文关怀。两者分别凸显了纪律责任感与医疗温暖的特质，均为社会正能量符号。', 'start_time': None, 'end_time': None}]: "None"
-2026-01-08 16:49:15.762 | INFO     | src.monitoring.logger:monitor_task_status:25 - [query_enhancer.py] query enhancer ended...: "None"
+### 环境要求
+
+- Python 3.10+
+- Milvus 2.3+
+- PostgreSQL 14+
+- Redis 6.0+
+- Ollama（本地 Embedding）
+
+### 安装依赖
+
+```bash
+pip install -r requirements.txt
 ```
 
-经优化后，整个查询增强模块耗时 4 ~ 6s。
+### 配置环境变量
 
-基于特征分析，动态调整增强模式。
+创建 `.env` 文件：
 
-### 扩展
-查询扩展是通过添加元数据、上下文或相关术语来扩展原始查询，以提高检索的全面性和准确性。利用LLM将用户查询扩展为多个不同角度、不同表述的查询。
+```env
+# LLM 配置
+QWEN_MODEL_NAME=qwen-plus
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_API_KEY=your_api_key
 
-作用：通过扩展查询，系统可以覆盖更多潜在相关文档，提高检索的召回率。
+# Milvus 配置
+MILVUS_HOST=localhost
+MILVUS_PORT=19530
+MILVUS_DB_NAME=hybridRagSystem
+MILVUS_TOKEN=root:Milvus
 
-### 重写
-对用户原始查询进行优化，使其更清晰、明确或更符合检索任务需求，以提高检索效果。
+# PostgreSQL 配置
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_password
+POSTGRES_DBNAME=hybridragsystem
 
-作用：通过重写，消除歧义、补充语义信息或调整查询结构，以提高检索结果的相关性。
+# Redis 配置
+REDIS_URI=redis://localhost:6379
 
-### 预测
-假设性文档嵌入（Hypothetical Document Embeddings, HyDE）
+# 日志配置
+LOG_LEVEL=INFO
+LOG_DIR=logs
+ENABLE_FILE_LOGGING=true
+ENABLE_CONSOLE_LOGGING=true
 
-当收到用户查询时，系统不直接用这个查询去检索。相反，它将查询输入给LLM，并指示LLM生成一个能够完美回答该查询的、假设性的文档段落 。
-将这个由LLM“凭空”生成的假设性文档进行向量化，得到一个假设性文档的嵌入（Embedding）。
-使用这个假设性文档的嵌入，去向量数据库中进行相似度搜索。
+# RAG 配置
+RERANKER_THRESHOLD=0.8
+GRADER_THRESHOLD=0.5
+```
 
-## Routing
-采用基于LLM语义的路由
+### 启动服务
 
-将用户的查询输入给一个LLM，并提供几个预设的“路由选项”（即下游RAG流程的描述）。LLM会根据对查询语义的理解，选择最匹配的选项
+```bash
+python main.py
+```
 
-## Search
-单一策略的局限性导致在复杂查询场景下，检索结果往往顾此失彼，召回率和精确率难以两全。Search模块通过引入更先进和复合的检索策略，旨在解决检索不准确、不全面的核心问题
+服务将在 `http://0.0.0.0:8000` 启动。
 
-对每个子查询进行检索，然后将所有结果汇总，极大地提升了召回率和信息覆盖度。
+## 📁 项目结构
 
-### 动态检索策略
-系统可以根据查询的特性动态调整检索策略。例如，对于包含大量专业术语的查询，可以增加BM25的权重；对于概念性的开放问题，则更倚重稠密检索
+```
+hybridRag/
+├── config.py                 # 配置管理
+├── main.py                   # 应用入口，日志初始化
+├── server.py                 # FastAPI 服务端点
+├── src/
+│   ├── core/
+│   │   ├── memory_manager.py # 对话记忆管理
+│   │   ├── tools_pool.py     # 工具池
+│   │   ├── adapter.py        # 任务适配器
+│   │   └── exceptions.py     # 自定义异常
+│   ├── node/
+│   │   ├── generate/         # 答案生成节点
+│   │   ├── retrieval/        # 检索节点
+│   │   └── route/            # 路由节点
+│   ├── services/
+│   │   ├── llm/              # LLM 模型封装
+│   │   ├── embedding/        # Embedding 模型
+│   │   ├── storage/          # 存储服务（PostgreSQL, Milvus）
+│   │   ├── data_load/        # 数据加载与分块
+│   │   ├── cross_encoder_ranker.py  # 重排序服务
+│   │   ├── time_transformer.py      # 时间解析
+│   │   ├── grade_model.py           # 文档评分
+│   │   └── task_analyzer.py         # 任务分析
+│   ├── observability/
+│   │   ├── logger.py         # 结构化日志系统
+│   │   └── langfuse_monitor.py # Langfuse 监控集成
+│   ├── eval/
+│   │   └── ragas_eval.py     # RAG 评估
+│   └── graph.py              # LangGraph 状态机
+├── frontend/                 # 前端界面
+├── logs/                     # 日志文件
+│   ├── app.log              # 全量日志（JSON）
+│   └── error.log            # 错误日志（JSON）
+└── tests/                    # 测试用例
+```
 
-### 多模态检索
-随着多模态数据的普及，Search模块也扩展到支持文本、图像、音频等多种模态的检索。这通常需要将不同模态的数据映射到统一的向量空间中进行相似度计算
+## 🔌 API 接口
 
-### 缓存与并行化
-为提升性能，对于高频查询，可以引入缓存机制。同时，利用分布式计算框架对大规模索引进行切分，实现并行检索，以满足低延迟的响应需求
+### 对话接口
 
-## RAG-Fusion
-RAG-Fusion是对Search模块检索结果进行优化的高级技术，专注于解决如何有效合并来自多个检索源或多个查询的结果列表的问题。
+| 方法   | 路径                 | 描述        |
+|------|--------------------|-----------|
+| POST | `/api/chat`        | 非流式对话     |
+| POST | `/api/chat/stream` | 流式对话（SSE） |
 
-### 加权RRF
-可以根据对不同查询或检索器可靠性的先验知识，为每个排名列表赋予不同的权重。
+### 知识库管理
 
-[//]: # (### 基于学习的融合（Learning-to-Rank）)
+| 方法     | 路径                                    | 描述          |
+|--------|---------------------------------------|-------------|
+| GET    | `/api/knowledge/collections`          | 列出所有知识库     |
+| DELETE | `/api/knowledge/collections/{name}`   | 删除知识库       |
+| POST   | `/api/knowledge/upload`               | 上传文档（新建知识库） |
+| GET    | `/api/knowledge/ingest-status/{name}` | 查询入库状态      |
+| GET    | `/api/knowledge/documents`            | 列出文档        |
+| DELETE | `/api/knowledge/documents`            | 删除文档        |
 
-[//]: # (更进一步，可以利用LambdaMART或神经网络等机器学习模型，将每个文档在不同列表中的排名、原始分数等作为特征，来训练一个专门的重排模型 。)
+### 会话管理
 
-[//]: # ()
-[//]: # (### 交叉注意力融合)
+| 方法     | 路径                               | 描述     |
+|--------|----------------------------------|--------|
+| GET    | `/api/conversations`             | 列出所有会话 |
+| GET    | `/api/conversations/{thread_id}` | 获取会话详情 |
+| DELETE | `/api/conversations/{thread_id}` | 删除会话   |
 
-[//]: # (在更底层的模型层面，可以利用交叉注意力机制来融合不同来源的信息，但这通常需要对模型进行微调，计算成本较高。)
+## ⚙️ 配置说明
 
-## Memory
+### 日志配置
 
-### 对话历史记忆辅助Query生成
-在RAG架构里，把多轮对话历史、用户资料、模型上下文（即模型“记忆”）合并到检索Query制作过程中；
-- Query expansion with context：不是只用用户本轮问题，还用过去几轮、模型总体的“记忆”做query。
-- Few-shot Learning Memory：用之前的few-shot example指导检索。
+| 环境变量                     | 默认值        | 描述         |
+|--------------------------|------------|------------|
+| `LOG_LEVEL`              | `INFO`     | 日志级别       |
+| `LOG_DIR`                | `logs`     | 日志目录       |
+| `ENABLE_FILE_LOGGING`    | `true`     | 启用文件日志     |
+| `ENABLE_CONSOLE_LOGGING` | `true`     | 启用控制台日志    |
+| `LOG_MAX_BYTES`          | `10485760` | 单文件最大 10MB |
+| `LOG_BACKUP_COUNT`       | `5`        | 备份文件数量     |
 
-### 动态User Profile/知识画像指导检索
-抽象用户中长期兴趣/需求（如个人特征、常问问题），模型“记住”这些内容，检索时用作优化Query或黑名单/白名单过滤。
+### RAG 配置
 
-### 内存驱动的检索反馈机制
-检索-LLM逐步对话中，模型“记住”“哪些片段已经看过、哪些事实已反驳”，指引本轮不再召回无关信息，甚至主动建议探索方向。
+| 配置项                             | 默认值     | 描述        |
+|---------------------------------|---------|-----------|
+| `enable_eval`                   | `false` | 启用 RAG 评估 |
+| `enable_parent_child_retrieval` | `true`  | 父子文档检索    |
+| `reranker_threshold`            | `0.8`   | 重排序过滤阈值   |
+| `grader_threshold`              | `0.5`   | 文档相关性阈值   |
+| `max_conversation_turns`        | `10`    | 最大对话轮数    |
 
-## TaskAdapter
-Task Adapter（任务适配器）模块专注于解决RAG系统在不同下游任务中的通用性与专业性问题。它使得一个通用的RAG平台能够低成本、高效率地适配各种特定的应用场景。
+## 📊 日志系统
 
-### 零样本（Zero-shot）适配
-Task Adapter可以维护一个预构建的 提示池（Prompt Pool） 。当新任务来临时，它会自动从池中检索或生成最适合该任务的提示模板 。例如，识别到“总结”关键词，就自动套用摘要任务的提示模板。
+系统采用结构化日志，支持：
 
-### 少样本（Few-shot）适配
-Task Adapter可以利用LLM强大的小样本学习能力，针对不同领域的问题提前构建对应的few-shot，并在LLM生成前将对应领域少量示例输入给LLM，让LLM生成更多、更丰富的、符合该任务特点的查询。
+- **JSON 格式**：便于日志收集和分析
+- **请求 ID 追踪**：通过 `thread_id` 追踪完整请求链路
+- **错误日志分离**：`error.log` 单独记录 ERROR 及以上级别
+- **人类可读格式**：控制台输出友好格式
+
+### 使用示例
+
+```python
+from src.observability.logger import get_logger, set_request_id
+
+# 设置请求 ID
+set_request_id("thread_123")
+
+# 获取 logger
+logger = get_logger(__name__)
+
+# 记录日志
+logger.info("[NodeName] 操作描述: key=value")
+```
+
+## 🔍 核心模块详解
+
+### 查询增强（QueryEnhancer）
+
+使用 LangChain 的 LCEL 表达式，将多个增强任务构造为 RunnableSerializable，使用 RunnableParallel 并行化执行：
+
+- **扩展**：添加元数据、上下文或相关术语扩展原始查询
+- **分解**：将复杂查询分解为多个子问题
+- **重写**：优化查询使其更清晰、明确
+- **HyDE 预测**：生成假设性文档辅助检索
+
+**性能对比**：
+
+- 同步请求：平均 4s
+- 并行化后：平均 1~1.5s
+
+### 智能路由（Router）
+
+基于 LLM 语义理解，将用户查询路由到最合适的检索策略：
+
+- 内部知识库检索
+- 外部搜索引擎
+- 混合检索
+
+### 检索融合（RAG-Fusion）
+
+多路检索结果融合技术：
+
+- **加权 RRF**：根据检索器可靠性赋予不同权重
+- **CrossEncoder 精排**：对融合结果进行精细化重排序
+
+### 对话记忆（Memory）
+
+- **对话历史记忆**：多轮对话历史辅助 Query 生成
+- **用户画像**：抽象用户中长期兴趣指导检索
+- **检索反馈**：记住已检索内容，避免重复召回
+
+### 文档分块（Chunk）
+
+支持多种分块策略，针对不同文档类型优化：
+
+- **递归分块**：使用中文优化分隔符（句号、问号、感叹号等），适用于 PDF、DOCX 等非结构化文档
+- **Markdown 结构化分块**：按标题层级（h1-h4）切分，保留文档结构信息
+- **父子文档分块**：大 chunk 作为上下文（1500 字符），小 chunk 用于向量检索（400 字符），提升检索精度
+
+**使用示例**：
+
+```python
+from src.services.data_load.chunk import ChunkHandler
+
+handler = ChunkHandler()
+
+# 递归分块
+chunks = handler.recursive_chunk(documents, chunk_size=1024, chunk_overlap=128)
+
+# Markdown 结构化分块
+md_chunks = handler.markdown_chunk(markdown_documents)
+
+# 父子文档分块（支持普通文档和 Markdown）
+parent_store, child_docs = handler.parent_child_chunk(documents)
+md_parent_store, md_child_docs = handler.markdown_parent_child_chunk(md_documents)
+```
+
+## 🧪 评估
+
+系统支持基于 Ragas 指标的 RAG 评估：
+
+```python
+import asyncio
+from src.eval.ragas_eval import RagEvaluator, EvalSample
 
 
-# 评估
+async def main():
+    evaluator = RagEvaluator()
 
-## 监控框架：Langfuse
+    # 创建评估样本
+    samples = [
+        EvalSample(
+            user_input="什么是机器学习？",
+            response="机器学习是人工智能的一个分支...",
+            retrieved_contexts=["机器学习是AI的子领域...", "机器学习包括监督学习..."],
+            reference="机器学习是人工智能的一个分支，通过数据训练模型。"  # 可选
+        )
+    ]
+
+    # 批量评估
+    report = await evaluator.evaluate_batch(samples)
+    RagEvaluator.print_report(report)
+
+
+asyncio.run(main())
+```
+
+**评估指标**：
+
+- **忠实度 (Faithfulness)**：回答是否忠实于检索上下文
+- **答案相关性 (Answer Relevancy)**：回答与问题的匹配程度
+- **上下文相关性 (Context Relevance)**：检索内容与问题的相关性
+- **上下文召回率 (Context Recall)**：检索内容是否覆盖参考答案
+
+## 📈 性能优化
+
+### 查询增强并行化
+
+通过 `RunnableParallel` 并行执行多个增强任务，将单个请求耗时从 **4s** 降低到 **1~1.5s**。
+
+### 缓存机制
+
+- 高频查询缓存
+- 分布式检索并行化
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request。
+
+## 📄 License
+
+MIT License
