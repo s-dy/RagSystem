@@ -3,9 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:8000; img-src 'self' data:;">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:8000; img-src 'self' data:;">
     <meta name="description" content="HybridRAG — 混合检索增强生成系统，支持多知识库管理、流式对话与智能问答">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+    <link rel="icon"
+          href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
     <title>HybridRAG</title>
     <link rel="stylesheet" href="css/base.css" fetchpriority="high">
     <link rel="stylesheet" href="css/layout.css">
@@ -18,447 +20,478 @@
     <script defer src="js/vendor/purify.min.js"></script>
 </head>
 <body>
-    <div id="app">
-        <!-- 侧边栏 -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-top">
-                <span class="sidebar-logo">HybridRAG</span>
-                <button class="sidebar-toggle-btn" id="btn-sidebar-toggle" title="收起侧边栏">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                        <line x1="9" y1="3" x2="9" y2="21"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="sidebar-new-chat-wrapper">
-                <button class="sidebar-new-chat-btn" id="btn-new-chat">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
-                    <span>开启新对话</span>
-                </button>
-            </div>
+<div id="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-top">
+            <span class="sidebar-logo">HybridRAG</span>
+            <button class="sidebar-toggle-btn" id="btn-sidebar-toggle" title="收起侧边栏">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="9" y1="3" x2="9" y2="21"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="sidebar-new-chat-wrapper">
+            <button class="sidebar-new-chat-btn" id="btn-new-chat">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>开启新对话</span>
+            </button>
+        </div>
 
-            <!-- 导航 -->
-            <nav class="sidebar-nav">
-                <button class="nav-item active" data-page="chat">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                    <span class="nav-label">对话问答</span>
-                </button>
-                <button class="nav-item" data-page="knowledge">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                    <span class="nav-label">知识库管理</span>
-                </button>
-            </nav>
+        <!-- 导航 -->
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-page="chat">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
+                <span class="nav-label">对话问答</span>
+            </button>
+            <button class="nav-item" data-page="knowledge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                </svg>
+                <span class="nav-label">知识库管理</span>
+            </button>
+        </nav>
 
-            <!-- 会话列表 -->
-            <div class="conversation-list" id="conversation-list">
-                <div class="conversation-items" id="conversation-items"></div>
-            </div>
+        <!-- 会话列表 -->
+        <div class="conversation-list" id="conversation-list">
+            <div class="conversation-items" id="conversation-items"></div>
+        </div>
 
-            <!-- 侧边栏底部 -->
-            <div class="sidebar-footer">
-                <button class="sidebar-footer-btn" id="theme-toggle" title="切换主题">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-                    </svg>
-                    <span class="nav-label">切换主题</span>
-                </button>
-            </div>
-        </aside>
+        <!-- 侧边栏底部 -->
+        <div class="sidebar-footer">
+            <button class="sidebar-footer-btn" id="theme-toggle" title="切换主题">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+                <span class="nav-label">切换主题</span>
+            </button>
+        </div>
+    </aside>
 
-        <!-- 侧边栏收起时的展开按钮 -->
-        <button class="sidebar-expand-btn hidden" id="btn-sidebar-expand" title="展开侧边栏">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <line x1="9" y1="3" x2="9" y2="21"></line>
-            </svg>
-        </button>
+    <!-- 侧边栏收起时的展开按钮 -->
+    <button class="sidebar-expand-btn hidden" id="btn-sidebar-expand" title="展开侧边栏">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+        </svg>
+    </button>
 
-        <!-- 侧边栏遮罩 -->
-        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+    <!-- 侧边栏遮罩 -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-        <!-- 主内容区 -->
-        <main class="main-content">
-            <div class="page-container">
-                <!-- 对话页面 -->
-                <div class="page active" id="page-chat">
-                    <div class="chat-container">
-                        <!-- 欢迎页 -->
-                        <div class="chat-welcome" id="chat-welcome">
-                            <h2>有什么可以帮忙的？</h2>
-                        </div>
-
-                        <!-- 消息列表 -->
-                        <div class="chat-messages" id="chat-messages"></div>
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <div class="page-container">
+            <!-- 对话页面 -->
+            <div class="page active" id="page-chat">
+                <div class="chat-container">
+                    <!-- 欢迎页 -->
+                    <div class="chat-welcome" id="chat-welcome">
+                        <h2>有什么可以帮忙的？</h2>
                     </div>
 
-                    <!-- 输入区域（OpenAI 风格：大圆角框，底部 pill 按钮） -->
-                    <div class="chat-input-area">
-                        <div class="input-box">
+                    <!-- 消息列表 -->
+                    <div class="chat-messages" id="chat-messages"></div>
+                </div>
+
+                <!-- 输入区域（OpenAI 风格：大圆角框，底部 pill 按钮） -->
+                <div class="chat-input-area">
+                    <div class="input-box">
                             <textarea
-                                id="chat-input"
-                                placeholder="给 HybridRAG 发送消息"
-                                rows="1"
-                                maxlength="4000"
+                                    id="chat-input"
+                                    placeholder="给 HybridRAG 发送消息"
+                                    rows="1"
+                                    maxlength="4000"
                             ></textarea>
-                            <div class="input-box-bottom">
-                                <div class="input-pills">
-                                    <button class="pill-btn" id="pill-web-search" title="联网搜索">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <circle cx="12" cy="12" r="10"></circle>
-                                            <line x1="2" y1="12" x2="22" y2="12"></line>
-                                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                                        </svg>
-                                        <span>联网搜索</span>
-                                    </button>
-                                </div>
-                                <div class="input-actions">
-                                    <button class="btn-send" id="btn-send" title="发送" disabled>
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                            <line x1="12" y1="19" x2="12" y2="5"></line>
-                                            <polyline points="5 12 12 5 19 12"></polyline>
-                                        </svg>
-                                    </button>
-                                    <button class="btn-stop hidden" id="btn-stop" title="停止生成">
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                                            <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                                        </svg>
-                                    </button>
-                                </div>
+                        <div class="input-box-bottom">
+                            <div class="input-pills">
+                                <button class="pill-btn" id="pill-web-search" title="联网搜索">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                                    </svg>
+                                    <span>联网搜索</span>
+                                </button>
+                            </div>
+                            <div class="input-actions">
+                                <button class="btn-send" id="btn-send" title="发送" disabled>
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-width="2.5">
+                                        <line x1="12" y1="19" x2="12" y2="5"></line>
+                                        <polyline points="5 12 12 5 19 12"></polyline>
+                                    </svg>
+                                </button>
+                                <button class="btn-stop hidden" id="btn-stop" title="停止生成">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                        <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                                    </svg>
+                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- 知识库管理页面 -->
-                <div class="page" id="page-knowledge">
-                    <div class="knowledge-container">
-                        <!-- 页头 -->
-                        <div class="knowledge-header">
-                            <div class="knowledge-header-left">
-                                <h2>知识库管理</h2>
-                                <p>管理向量数据库中的知识集合，上传文档构建专属知识库</p>
+            <!-- 知识库管理页面 -->
+            <div class="page" id="page-knowledge">
+                <div class="knowledge-container">
+                    <!-- 页头 -->
+                    <div class="knowledge-header">
+                        <div class="knowledge-header-left">
+                            <h2>知识库管理</h2>
+                            <p>管理向量数据库中的知识集合，上传文档构建专属知识库</p>
+                        </div>
+                        <div class="knowledge-header-right">
+                            <span class="knowledge-stat" id="knowledge-stat"></span>
+                            <button class="btn-icon" id="btn-refresh-dashboard" title="刷新仪表盘">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <polyline points="1 20 1 14 7 14"></polyline>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- ═══ 上半部分：全局资源与状态 ═══ -->
+                    <div class="dashboard-overview">
+                        <!-- 模型管理卡片 -->
+                        <div class="overview-section">
+                            <div class="overview-section-title">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2">
+                                    <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                                    <path d="M2 17l10 5 10-5"></path>
+                                    <path d="M2 12l10 5 10-5"></path>
+                                </svg>
+                                模型资源
                             </div>
-                            <div class="knowledge-header-right">
-                                <span class="knowledge-stat" id="knowledge-stat"></span>
-                                <button class="btn-icon" id="btn-refresh-dashboard" title="刷新仪表盘">
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <polyline points="23 4 23 10 17 10"></polyline>
-                                        <polyline points="1 20 1 14 7 14"></polyline>
-                                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                                    </svg>
-                                </button>
+                            <div class="model-cards" id="model-cards">
+                                <!-- 由 JS renderModelSkeleton() 动态渲染 -->
                             </div>
                         </div>
 
-                        <!-- ═══ 上半部分：全局资源与状态 ═══ -->
-                        <div class="dashboard-overview">
-                            <!-- 模型管理卡片 -->
-                            <div class="overview-section">
-                                <div class="overview-section-title">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                                        <path d="M2 17l10 5 10-5"></path>
-                                        <path d="M2 12l10 5 10-5"></path>
-                                    </svg>
-                                    模型资源
-                                </div>
-                                <div class="model-cards" id="model-cards">
-                                    <!-- 由 JS renderModelSkeleton() 动态渲染 -->
-                                </div>
+                        <!-- 知识库概览统计 -->
+                        <div class="overview-section">
+                            <div class="overview-section-title">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                </svg>
+                                知识库概览
                             </div>
-
-                            <!-- 知识库概览统计 -->
-                            <div class="overview-section">
-                                <div class="overview-section-title">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-                                    </svg>
-                                    知识库概览
+                            <div class="overview-stats" id="overview-stats">
+                                <div class="overview-stat-card">
+                                    <div class="overview-stat-value" id="stat-collection-count">0</div>
+                                    <div class="overview-stat-label">知识库数量</div>
                                 </div>
-                                <div class="overview-stats" id="overview-stats">
-                                    <div class="overview-stat-card">
-                                        <div class="overview-stat-value" id="stat-collection-count">0</div>
-                                        <div class="overview-stat-label">知识库数量</div>
-                                    </div>
-                                    <div class="overview-stat-card">
-                                        <div class="overview-stat-value" id="stat-total-records">0</div>
-                                        <div class="overview-stat-label">总记录数</div>
-                                    </div>
-                                    <div class="overview-stat-card">
-                                        <div class="overview-stat-value" id="stat-total-files">0</div>
-                                        <div class="overview-stat-label">已上传文件</div>
-                                    </div>
-                                    <div class="overview-stat-card">
-                                        <div class="overview-stat-value" id="stat-db-status">--</div>
-                                        <div class="overview-stat-label">Milvus 状态</div>
-                                    </div>
+                                <div class="overview-stat-card">
+                                    <div class="overview-stat-value" id="stat-total-records">0</div>
+                                    <div class="overview-stat-label">总记录数</div>
+                                </div>
+                                <div class="overview-stat-card">
+                                    <div class="overview-stat-value" id="stat-total-files">0</div>
+                                    <div class="overview-stat-label">已上传文件</div>
+                                </div>
+                                <div class="overview-stat-card">
+                                    <div class="overview-stat-value" id="stat-db-status">--</div>
+                                    <div class="overview-stat-label">Milvus 状态</div>
                                 </div>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- ═══ 下半部分：核心工作流 Tabs ═══ -->
-                        <div class="workflow-tabs">
-                            <div class="tabs-header">
-                                <button class="tab-btn active" data-tab="tab-import">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                        <polyline points="17 8 12 3 7 8"></polyline>
-                                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                                    </svg>
-                                    数据导入
-                                </button>
-                                <button class="tab-btn" data-tab="tab-collections">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                                    </svg>
-                                    知识库列表
-                                </button>
-                                <button class="tab-btn" data-tab="tab-documents">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                        <polyline points="14 2 14 8 20 8"></polyline>
-                                        <line x1="16" y1="13" x2="8" y2="13"></line>
-                                        <line x1="16" y1="17" x2="8" y2="17"></line>
-                                    </svg>
-                                    文档管理
-                                </button>
-                            </div>
+                    <!-- ═══ 下半部分：核心工作流 Tabs ═══ -->
+                    <div class="workflow-tabs">
+                        <div class="tabs-header">
+                            <button class="tab-btn active" data-tab="tab-import">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                数据导入
+                            </button>
+                            <button class="tab-btn" data-tab="tab-collections">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2">
+                                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                                </svg>
+                                知识库列表
+                            </button>
+                            <button class="tab-btn" data-tab="tab-documents">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                                </svg>
+                                文档管理
+                            </button>
+                        </div>
 
-                            <!-- Tab 1: 数据导入 -->
-                            <div class="tab-panel active" id="tab-import">
-                                <!-- 拖拽上传区 -->
-                                <div class="upload-dropzone" id="upload-dropzone">
-                                    <div class="dropzone-content">
-                                        <div class="dropzone-icon">
-                                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                                <polyline points="17 8 12 3 7 8"></polyline>
-                                                <line x1="12" y1="3" x2="12" y2="15"></line>
-                                            </svg>
-                                        </div>
-                                        <div class="dropzone-text">
-                                            <span class="dropzone-title">拖拽文件到此处上传</span>
-                                            <span class="dropzone-subtitle">或 <button class="dropzone-browse" id="btn-upload-doc">点击选择文件</button></span>
-                                            <span class="dropzone-hint">支持 PDF、Word、TXT、Markdown 格式</span>
-                                        </div>
-                                    </div>
-                                    <!-- 上传进度 -->
-                                    <div class="upload-progress hidden" id="upload-progress">
-                                        <div class="upload-progress-header">
-                                            <span class="upload-progress-title" id="upload-progress-title">正在上传...</span>
-                                            <span class="upload-progress-percent" id="upload-progress-percent">0%</span>
-                                        </div>
-                                        <div class="upload-progress-bar">
-                                            <div class="upload-progress-fill" id="upload-progress-fill"></div>
-                                        </div>
-                                        <div class="upload-file-list" id="upload-file-list"></div>
-                                    </div>
-                                </div>
-
-                                <!-- 分块配置 -->
-                                <div class="chunk-config-panel">
-                                    <div class="chunk-config-header">
-                                        <h4>
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                <circle cx="12" cy="12" r="3"></circle>
-                                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-                                            </svg>
-                                            解析与分块配置
-                                        </h4>
-                                        <p class="chunk-config-desc">调整文本分块参数以优化检索效果</p>
-                                    </div>
-                                    <div class="chunk-config-body">
-                                        <div class="chunk-config-row">
-                                            <div class="chunk-config-field">
-                                                <label class="chunk-label">
-                                                    分块大小 (Chunk Size)
-                                                    <span class="chunk-value" id="chunk-size-value">500</span> 字符
-                                                </label>
-                                                <input type="range" class="chunk-slider" id="chunk-size-slider" min="100" max="2000" step="50" value="500">
-                                                <div class="chunk-range-labels">
-                                                    <span>100</span>
-                                                    <span>2000</span>
-                                                </div>
-                                            </div>
-                                            <div class="chunk-config-field">
-                                                <label class="chunk-label">
-                                                    重叠窗口 (Chunk Overlap)
-                                                    <span class="chunk-value" id="chunk-overlap-value">50</span> 字符
-                                                </label>
-                                                <input type="range" class="chunk-slider" id="chunk-overlap-slider" min="0" max="500" step="10" value="50">
-                                                <div class="chunk-range-labels">
-                                                    <span>0</span>
-                                                    <span>500</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="chunk-presets">
-                                            <span class="chunk-preset-label">预设方案：</span>
-                                            <button class="chunk-preset-btn" data-size="200" data-overlap="20">精细（技术手册）</button>
-                                            <button class="chunk-preset-btn active" data-size="500" data-overlap="50">标准（通用文档）</button>
-                                            <button class="chunk-preset-btn" data-size="1000" data-overlap="100">粗粒度（政策条款）</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Tab 2: 知识库列表 -->
-                            <div class="tab-panel" id="tab-collections">
-                                <div class="knowledge-toolbar">
-                                    <div class="knowledge-search">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <circle cx="11" cy="11" r="8"></circle>
-                                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        <!-- Tab 1: 数据导入 -->
+                        <div class="tab-panel active" id="tab-import">
+                            <!-- 拖拽上传区 -->
+                            <div class="upload-dropzone" id="upload-dropzone">
+                                <div class="dropzone-content">
+                                    <div class="dropzone-icon">
+                                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="1.5">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="17 8 12 3 7 8"></polyline>
+                                            <line x1="12" y1="3" x2="12" y2="15"></line>
                                         </svg>
-                                        <input type="text" id="knowledge-search-input" placeholder="搜索知识库..." autocomplete="off">
                                     </div>
-                                    <div class="knowledge-actions">
-                                        <button class="btn-icon" id="btn-refresh-collections" title="刷新列表">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                <polyline points="23 4 23 10 17 10"></polyline>
-                                                <polyline points="1 20 1 14 7 14"></polyline>
-                                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                                            </svg>
+                                    <div class="dropzone-text">
+                                        <span class="dropzone-title">拖拽文件到此处上传</span>
+                                        <span class="dropzone-subtitle">或 <button class="dropzone-browse"
+                                                                                   id="btn-upload-doc">点击选择文件</button></span>
+                                        <span class="dropzone-hint">支持 PDF、Word、TXT、Markdown 格式</span>
+                                    </div>
+                                </div>
+                                <!-- 上传进度 -->
+                                <div class="upload-progress hidden" id="upload-progress">
+                                    <div class="upload-progress-header">
+                                        <span class="upload-progress-title"
+                                              id="upload-progress-title">正在上传...</span>
+                                        <span class="upload-progress-percent" id="upload-progress-percent">0%</span>
+                                    </div>
+                                    <div class="upload-progress-bar">
+                                        <div class="upload-progress-fill" id="upload-progress-fill"></div>
+                                    </div>
+                                    <div class="upload-file-list" id="upload-file-list"></div>
+                                </div>
+                            </div>
+
+                            <!-- 分块配置 -->
+                            <div class="chunk-config-panel">
+                                <div class="chunk-config-header">
+                                    <h4>
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="3"></circle>
+                                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                                        </svg>
+                                        解析与分块配置
+                                    </h4>
+                                    <p class="chunk-config-desc">调整文本分块参数以优化检索效果</p>
+                                </div>
+                                <div class="chunk-config-body">
+                                    <div class="chunk-config-row">
+                                        <div class="chunk-config-field">
+                                            <label class="chunk-label">
+                                                分块大小 (Chunk Size)
+                                                <span class="chunk-value" id="chunk-size-value">500</span> 字符
+                                            </label>
+                                            <input type="range" class="chunk-slider" id="chunk-size-slider" min="100"
+                                                   max="1500" step="2" value="300">
+                                            <div class="chunk-range-labels">
+                                                <span>100</span>
+                                                <span>1500</span>
+                                            </div>
+                                        </div>
+                                        <div class="chunk-config-field">
+                                            <label class="chunk-label">
+                                                重叠窗口 (Chunk Overlap)
+                                                <span class="chunk-value" id="chunk-overlap-value">50</span> 字符
+                                            </label>
+                                            <input type="range" class="chunk-slider" id="chunk-overlap-slider" min="0"
+                                                   max="500" step="2" value="60">
+                                            <div class="chunk-range-labels">
+                                                <span>0</span>
+                                                <span>500</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="chunk-presets">
+                                        <span class="chunk-preset-label">预设方案：</span>
+                                        <button class="chunk-preset-btn" data-size="640" data-overlap="80">
+                                            精细（技术文档）
+                                        </button>
+                                        <button class="chunk-preset-btn active" data-size="400" data-overlap="70">
+                                            标准（通用文档）
+                                        </button>
+                                        <button class="chunk-preset-btn" data-size="1000" data-overlap="256">
+                                            粗粒度（法律文书）
                                         </button>
                                     </div>
                                 </div>
-                                <div class="collection-grid" id="collection-grid">
-                                    <div class="loading-placeholder">
-                                        <div class="spinner"></div>
-                                        <p>加载知识库列表...</p>
-                                    </div>
-                                </div>
                             </div>
+                        </div>
 
-                            <!-- Tab 3: 文档管理 -->
-                            <div class="tab-panel" id="tab-documents">
-                                <div class="doc-toolbar">
-                                    <div class="doc-toolbar-left">
-                                        <div class="doc-collection-selector">
-                                            <label>选择知识库：</label>
-                                            <select id="doc-collection-select" class="modal-select">
-                                                <option value="">-- 全部知识库 --</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="doc-toolbar-right">
-                                        <button class="btn-icon" id="btn-refresh-documents" title="刷新文档列表">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                <polyline points="23 4 23 10 17 10"></polyline>
-                                                <polyline points="1 20 1 14 7 14"></polyline>
-                                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                                            </svg>
-                                        </button>
-                                    </div>
+                        <!-- Tab 2: 知识库列表 -->
+                        <div class="tab-panel" id="tab-collections">
+                            <div class="knowledge-toolbar">
+                                <div class="knowledge-search">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-width="2">
+                                        <circle cx="11" cy="11" r="8"></circle>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                    </svg>
+                                    <input type="text" id="knowledge-search-input" placeholder="搜索知识库..."
+                                           autocomplete="off">
                                 </div>
-                                <div class="doc-table-wrapper" id="doc-table-wrapper">
-                                    <table class="doc-table">
-                                        <thead>
-                                            <tr>
-                                                <th><input type="checkbox" id="doc-select-all"></th>
-                                                <th>文件名</th>
-                                                <th>大小</th>
-                                                <th>所属知识库</th>
-                                                <th>上传时间</th>
-                                                <th>状态</th>
-                                                <th>操作</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="doc-table-body">
-                                            <tr class="doc-empty-row">
-                                                <td colspan="7">
-                                                    <div class="empty-state" style="padding: 40px 20px;">
-                                                        <div class="empty-state-icon">📄</div>
-                                                        <div class="empty-state-text">暂无文档</div>
-                                                        <div class="empty-state-hint">上传文件后将在此处显示</div>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                </div>
-                                <div class="doc-batch-actions hidden" id="doc-batch-actions">
-                                    <span class="doc-batch-count" id="doc-batch-count">已选 0 个文件</span>
-                                    <button class="btn-danger-sm" id="btn-batch-delete">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <polyline points="3 6 5 6 21 6"></polyline>
-                                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                <div class="knowledge-actions">
+                                    <button class="btn-icon" id="btn-refresh-collections" title="刷新列表">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="2">
+                                            <polyline points="23 4 23 10 17 10"></polyline>
+                                            <polyline points="1 20 1 14 7 14"></polyline>
+                                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                                         </svg>
-                                        批量删除
                                     </button>
                                 </div>
+                            </div>
+                            <div class="collection-grid" id="collection-grid">
+                                <div class="loading-placeholder">
+                                    <div class="spinner"></div>
+                                    <p>加载知识库列表...</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 3: 文档管理 -->
+                        <div class="tab-panel" id="tab-documents">
+                            <div class="doc-toolbar">
+                                <div class="doc-toolbar-left">
+                                    <div class="doc-collection-selector">
+                                        <label>选择知识库：</label>
+                                        <select id="doc-collection-select" class="modal-select">
+                                            <option value="">-- 全部知识库 --</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="doc-toolbar-right">
+                                    <button class="btn-icon" id="btn-refresh-documents" title="刷新文档列表">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="2">
+                                            <polyline points="23 4 23 10 17 10"></polyline>
+                                            <polyline points="1 20 1 14 7 14"></polyline>
+                                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="doc-table-wrapper" id="doc-table-wrapper">
+                                <table class="doc-table">
+                                    <thead>
+                                    <tr>
+                                        <th><input type="checkbox" id="doc-select-all"></th>
+                                        <th>文件名</th>
+                                        <th>大小</th>
+                                        <th>所属知识库</th>
+                                        <th>上传时间</th>
+                                        <th>状态</th>
+                                        <th>操作</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody id="doc-table-body">
+                                    <tr class="doc-empty-row">
+                                        <td colspan="7">
+                                            <div class="empty-state" style="padding: 40px 20px;">
+                                                <div class="empty-state-icon">📄</div>
+                                                <div class="empty-state-text">暂无文档</div>
+                                                <div class="empty-state-hint">上传文件后将在此处显示</div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="doc-batch-actions hidden" id="doc-batch-actions">
+                                <span class="doc-batch-count" id="doc-batch-count">已选 0 个文件</span>
+                                <button class="btn-danger-sm" id="btn-batch-delete">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-width="2">
+                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    </svg>
+                                    批量删除
+                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
-        </main>
-    </div>
-
-    <!-- 上传弹窗：选择目标知识库 -->
-    <div class="modal-overlay hidden" id="upload-modal-overlay">
-        <div class="modal" id="upload-modal">
-            <div class="modal-header">
-                <h3>上传文档到知识库</h3>
-                <button class="modal-close" id="upload-modal-close" title="关闭">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <div class="modal-field">
-                    <label class="modal-label">目标知识库</label>
-                    <div class="modal-select-group">
-                        <select id="upload-collection-select" class="modal-select">
-                            <option value="">-- 选择已有知识库 --</option>
-                        </select>
-                        <span class="modal-or">或</span>
-                        <input type="text" id="upload-collection-new" class="modal-input" placeholder="输入新知识库名称">
-                    </div>
-                    <p class="modal-hint">选择已有知识库或输入名称创建新知识库</p>
-                </div>
-                <div id="upload-collection-meta" class="modal-field-group hidden">
-                    <div class="modal-field">
-                        <label class="modal-label">知识库描述</label>
-                        <input type="text" id="upload-collection-description" class="modal-input" placeholder="简要描述知识库内容（可选）">
-                    </div>
-                    <div class="modal-field">
-                        <label class="modal-label">领域</label>
-                        <input type="text" id="upload-collection-domain" class="modal-input" placeholder="如：technology、medical、news（可选）">
-                    </div>
-                    <div class="modal-field">
-                        <label class="modal-label">关键词</label>
-                        <input type="text" id="upload-collection-keywords" class="modal-input" placeholder="多个关键词用逗号分隔（可选）">
-                    </div>
-                </div>
-                <div class="modal-field">
-                    <label class="modal-label">已选文件</label>
-                    <div class="modal-file-list" id="upload-modal-files"></div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary modal-btn" id="upload-modal-cancel">取消</button>
-                <button class="btn-primary modal-btn" id="upload-modal-confirm" disabled>开始上传</button>
             </div>
         </div>
+    </main>
+</div>
+
+<!-- 上传弹窗：选择目标知识库 -->
+<div class="modal-overlay hidden" id="upload-modal-overlay">
+    <div class="modal" id="upload-modal">
+        <div class="modal-header">
+            <h3>上传文档到知识库</h3>
+            <button class="modal-close" id="upload-modal-close" title="关闭">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="modal-field">
+                <label class="modal-label">目标知识库</label>
+                <div class="modal-select-group">
+                    <select id="upload-collection-select" class="modal-select">
+                        <option value="">-- 选择已有知识库 --</option>
+                    </select>
+                    <span class="modal-or">或</span>
+                    <input type="text" id="upload-collection-new" class="modal-input" placeholder="输入新知识库名称">
+                </div>
+                <p class="modal-hint">选择已有知识库或输入名称创建新知识库</p>
+            </div>
+            <div id="upload-collection-meta" class="modal-field-group hidden">
+                <div class="modal-field">
+                    <label class="modal-label">知识库描述</label>
+                    <input type="text" id="upload-collection-description" class="modal-input"
+                           placeholder="简要描述知识库内容（可选）">
+                </div>
+                <div class="modal-field">
+                    <label class="modal-label">领域</label>
+                    <input type="text" id="upload-collection-domain" class="modal-input"
+                           placeholder="如：technology、medical、news（可选）">
+                </div>
+                <div class="modal-field">
+                    <label class="modal-label">关键词</label>
+                    <input type="text" id="upload-collection-keywords" class="modal-input"
+                           placeholder="多个关键词用逗号分隔（可选）">
+                </div>
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">已选文件</label>
+                <div class="modal-file-list" id="upload-modal-files"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-secondary modal-btn" id="upload-modal-cancel">取消</button>
+            <button class="btn-primary modal-btn" id="upload-modal-confirm" disabled>开始上传</button>
+        </div>
     </div>
+</div>
 
-    <!-- 隐藏的 checkbox 用于保持联网搜索状态 -->
-    <input type="checkbox" id="toggle-web-search" style="display:none">
+<!-- 隐藏的 checkbox 用于保持联网搜索状态 -->
+<input type="checkbox" id="toggle-web-search" style="display:none">
 
-    <script src="js/app.js"></script>
-    <script src="js/chat.js"></script>
-    <script src="js/knowledge.js"></script>
+<script src="js/app.js"></script>
+<script src="js/chat.js"></script>
+<script src="js/knowledge.js"></script>
 </body>
 </html>
