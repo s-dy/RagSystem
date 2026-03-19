@@ -118,6 +118,12 @@ ENABLE_CONSOLE_LOGGING=true
 # RAG 配置
 RERANKER_THRESHOLD=0.8
 GRADER_THRESHOLD=0.5
+
+# MCP 服务
+MCP_BING_SEARCH_URL=http://localhost:8080/mcp
+
+# Huggingface Models Path
+HF_MODELS_PATH=/.cache/huggingface/hub
 ```
 
 ### 启动服务
