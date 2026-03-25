@@ -13,6 +13,7 @@
 **现状**：`combined_docs = "\n".join(docs)`，将所有检索文档拼接后计算与 query 的整体余弦相似度，返回一个布尔值。
 
 **问题**：
+
 - 这是"整体评分"而非"逐文档评分"
 - 如果 4 篇文档中有 1 篇高度相关、3 篇完全无关，合并后的向量会被无关文档稀释，可能导致整体分数低于阈值而误判为"不相关"
 - 反之，大量弱相关文档合并后也可能虚高通过
@@ -28,6 +29,7 @@
 **现状**：`asimilarity_search_with_score(query, k=4)` 硬编码为 4 条。
 
 **问题**：
+
 - 简单事实查询可能只需 1-2 条高质量文档，固定 k=4 引入噪声
 - 复杂分析型查询可能需要 8-10 条，k=4 导致信息不足
 
@@ -39,9 +41,11 @@
 
 **位置**：`src/node/retrieval/retrieval_node.py` → `__fusion_retrieve()` 第 168-180 行
 
-**现状**：交叉编码器重排序使用 `threshold=self.config.reranker_threshold`（默认 0.8）过滤，如果所有文档分数都低于阈值，`ordered_docs` 为空，`search_content` 为空字符串。
+**现状**：交叉编码器重排序使用 `threshold=self.config.reranker_threshold`（默认 0.8）过滤，如果所有文档分数都低于阈值，
+`ordered_docs` 为空，`search_content` 为空字符串。
 
 **问题**：
+
 - 高阈值 + 严格过滤 = 可能所有文档都被过滤掉
 - 生成阶段完全没有参考资料，但流程仍然继续生成答案，幻觉风险极高
 
@@ -58,6 +62,7 @@
 **现状**：去重逻辑为 `re.sub(r'[^\w\s]', '', content.lower().strip())`，移除所有标点后做精确匹配。
 
 **问题**：
+
 - 只能去除完全相同的文档
 - 两篇文档有 90% 重叠但略有不同（如来自不同分块策略），无法识别为近似重复
 - 不同来源的同一段落（如父文档和子文档）也无法去重
@@ -73,6 +78,7 @@
 **现状**：同义改写、扩展改写、专业化改写、HyDE 预测、查询分解共 5 个 LLM 调用并行执行。
 
 **问题**：
+
 - 没有对增强结果的质量评估，低质量改写可能引入噪声检索
 - `_deduplicate_queries` 只做精确去重（移除标点后比较），语义相近但措辞不同的查询无法去重
 - 所有增强策略对所有查询类型一视同仁，没有根据查询特征选择性启用
@@ -88,6 +94,7 @@
 **现状**：每个查询都调用 LLM 判断路由到哪个知识库。
 
 **问题**：
+
 - 相同或相似的查询每次都重新调用 LLM，浪费资源
 - LLM 路由判断可能不稳定（同一查询多次调用结果不同）
 - 如果 LLM 返回格式错误或空数组，没有回退到默认知识库的机制
@@ -103,6 +110,7 @@
 **现状**：`CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512)`，交叉编码器截断超过 512 token 的文档。
 
 **问题**：
+
 - 如果使用父子文档策略，父文档通常较长（1000+ token），截断后丢失关键信息，导致重排序分数不准确
 
 **改进方向**：对长文档采用滑动窗口取最高分，或使用支持更长输入的重排序模型。
@@ -116,6 +124,7 @@
 **现状**：`filtered = [(doc, score) for doc, score in result if score >= 0.2]`
 
 **问题**：
+
 - 0.2 是一个非常低的阈值，几乎不过滤任何结果，等于没有初筛
 - 不同 embedding 模型的分数分布不同，硬编码阈值缺乏适应性
 
@@ -132,6 +141,7 @@
 **现状**：重排序已经按相关性排序并过滤了低分文档，`grade_documents` 又用另一个模型（`bge-large-zh-v1.5`）做整体相关性评分。
 
 **问题**：
+
 - 两次评分使用不同模型、不同粒度，可能产生矛盾判断
 - grade 失败后触发重新检索（回到 `enhance_and_route_current`），但查询增强策略不变，容易陷入相同结果的循环
 
@@ -159,16 +169,79 @@
 
 ## 问题优先级排序
 
-| 优先级 | 问题 | 影响 |
-|:------:|------|------|
-| P0 | DocumentGrader 整体评分 | 评分不准确，影响检索质量判断 |
-| P0 | 重排序后无兜底机制 | 可能导致无参考资料生成，幻觉风险 |
-| P1 | 向量检索固定 k=4 | 简单查询噪声多，复杂查询信息不足 |
-| P1 | 融合去重策略粗暴 | 近似重复文档无法去除，浪费 token |
-| P1 | CrossEncoder max_length=512 | 长文档重排序不准确 |
-| P2 | 查询增强缺乏质量控制 | 低质量改写引入噪声 |
-| P2 | 查询路由无缓存和回退 | 资源浪费、稳定性差 |
-| P2 | 相似度阈值硬编码 | 缺乏适应性 |
-| P3 | 评分与重排序重叠 | 矛盾判断、循环风险 |
-| P3 | 外部检索改写独立 | 重复 LLM 调用 |
-| P3 | 无元数据过滤 | 检索精度受限 |
+| 优先级 | 问题                          | 影响                  |
+|:---:|-----------------------------|---------------------|
+| P0  | DocumentGrader 整体评分         | 评分不准确，影响检索质量判断      |
+| P0  | 重排序后无兜底机制                   | 可能导致无参考资料生成，幻觉风险    |
+| P1  | 向量检索固定 k=4                  | 简单查询噪声多，复杂查询信息不足    |
+| P1  | 融合去重策略粗暴                    | 近似重复文档无法去除，浪费 token |
+| P1  | CrossEncoder max_length=512 | 长文档重排序不准确           |
+| P2  | 查询增强缺乏质量控制                  | 低质量改写引入噪声           |
+| P2  | 查询路由无缓存和回退                  | 资源浪费、稳定性差           |
+| P2  | 相似度阈值硬编码                    | 缺乏适应性               |
+| P3  | 评分与重排序重叠                    | 矛盾判断、循环风险           |
+| P3  | 外部检索改写独立                    | 重复 LLM 调用           |
+| P3  | 无元数据过滤                      | 检索精度受限              |
+
+---
+
+## 多模态检索优化（已实现）
+
+以下问题在多模态 RAG 扩展中已完成实现，记录于此供参考。
+
+### 12. ~~图片检索无并行化~~ ✅ 已实现
+
+**位置**：`src/node/retrieval/retrieval_node.py` → `__retrieve_images()`
+
+**现状（已修复）**：对多个 collection 使用 `asyncio.gather` 并行发起图片检索，各 collection 独立检索，单个失败不影响其他。
+
+**实现**：
+
+```python
+results_per_collection = await asyncio.gather(
+    *[search_one_collection(name) for name in router_index.keys()]
+)
+```
+
+---
+
+### 13. ~~图片检索结果无去重~~ ✅ 已实现
+
+**位置**：`src/services/storage/milvus_image_client.py` → `_search()` 和 `retrieval_node.py` → `__retrieve_images()`
+
+**现状（已修复）**：两层去重机制：
+
+- `_search()` 内按 `image_id` 去重（单 collection 内）
+- `__retrieve_images()` 跨 collection 按 `image_id` 去重
+
+---
+
+### 14. ~~图片检索无相似度阈值过滤~~ ✅ 已实现
+
+**位置**：`src/services/storage/milvus_image_client.py` → `_search()`
+
+**现状（已修复）**：多取候选（`top_k * 3`）后按 `IMAGE_SCORE_THRESHOLD`（默认 0.25）过滤低相关图片，避免低质量图片传入 VLM。
+
+---
+
+### 15. ~~图文检索结果无统一排序~~ ✅ 已实现（混合图文 RRF 融合）
+
+**位置**：`src/node/retrieval/retrieval_node.py` → `__fusion_retrieve()`
+
+**现状（已修复）**：将图片 CLIP score 归一化到文字 rerank score 量级，统一排序：
+
+```python
+image.rrf_score = image.score / max(max_text_score, 1e-6)
+retrieved_images.sort(key=lambda img: img.rrf_score, reverse=True)
+```
+
+---
+
+### 16. ~~表格内容检索召回率低~~ ✅ 已实现（表格摘要增强）
+
+**位置**：`src/services/data_load/data_storage.py` → `_ingest_tables_from_path()`
+
+**现状（已修复）**：表格写入两种格式的 chunk：
+
+- Markdown 格式：保留原始结构，适合精确匹配
+- 逐行自然语言摘要：提升语义检索召回率

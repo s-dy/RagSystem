@@ -6,11 +6,11 @@
 
 ### 一、切分策略总览
 
-| 策略 | 适用文件类型 | 核心类/方法 | 配置方式 |
-|------|-------------|------------|----------|
-| 中文优化递归切分 | PDF、DOCX | `ChunkHandler.recursive_chunk()` | 默认启用 |
-| Markdown 结构化切分 | `.md` / `.markdown` | `ChunkHandler.markdown_chunk()` | 按 `file_type` 自动路由 |
-| 父子文档切分 | 所有格式 | `ChunkHandler.parent_child_chunk()` | `RagSystemConfig.enable_parent_child_retrieval` |
+| 策略             | 适用文件类型              | 核心类/方法                              | 配置方式                                            |
+|----------------|---------------------|-------------------------------------|-------------------------------------------------|
+| 中文优化递归切分       | PDF、DOCX            | `ChunkHandler.recursive_chunk()`    | 默认启用                                            |
+| Markdown 结构化切分 | `.md` / `.markdown` | `ChunkHandler.markdown_chunk()`     | 按 `file_type` 自动路由                              |
+| 父子文档切分         | 所有格式                | `ChunkHandler.parent_child_chunk()` | `RagSystemConfig.enable_parent_child_retrieval` |
 
 ---
 
@@ -28,10 +28,10 @@
 
 **默认参数**：
 
-| 参数 | 值 | 说明 |
-|------|:--:|------|
-| chunk_size | 1024 | 每个分块最大字符数 |
-| chunk_overlap | 128 | 相邻分块重叠字符数 |
+| 参数            |  值   | 说明        |
+|---------------|:----:|-----------|
+| chunk_size    | 1024 | 每个分块最大字符数 |
+| chunk_overlap | 128  | 相邻分块重叠字符数 |
 
 **数据流**：
 
@@ -50,17 +50,18 @@
 
 **实现原理**：
 
-1. **第一层**：使用 `MarkdownHeaderTextSplitter` 按标题层级（`#` / `##` / `###` / `####`）切分，每个章节/小节成为一个独立 chunk
+1. **第一层**：使用 `MarkdownHeaderTextSplitter` 按标题层级（`#` / `##` / `###` / `####`）切分，每个章节/小节成为一个独立
+   chunk
 2. **第二层**：对超过 `chunk_size` 的章节，使用 `RecursiveCharacterTextSplitter`（中文分隔符）进行二次切分
 
 **标题层级配置**：
 
 | Markdown 标记 | 元数据键 |
-|:-------------:|:--------:|
-| `#` | h1 |
-| `##` | h2 |
-| `###` | h3 |
-| `####` | h4 |
+|:-----------:|:----:|
+|     `#`     |  h1  |
+|    `##`     |  h2  |
+|    `###`    |  h3  |
+|   `####`    |  h4  |
 
 **元数据合并**：切分后的 chunk 同时包含原始文件元数据（source、file_type 等）和标题层级元数据（h1、h2、h3 等），便于检索时按章节过滤。
 
@@ -104,12 +105,12 @@
 
 **默认参数**：
 
-| 参数 | 值 | 说明 |
-|------|:--:|------|
-| parent_size | 1500 | 父文档最大字符数 |
-| parent_overlap | 200 | 父文档重叠字符数 |
-| child_size | 400 | 子文档最大字符数 |
-| child_overlap | 64 | 子文档重叠字符数 |
+| 参数             |  值   | 说明       |
+|----------------|:----:|----------|
+| parent_size    | 1500 | 父文档最大字符数 |
+| parent_overlap | 200  | 父文档重叠字符数 |
+| child_size     | 400  | 子文档最大字符数 |
+| child_overlap  |  64  | 子文档重叠字符数 |
 
 **parent_id 格式**：`{source文件路径}_{父文档序号}`，例如 `data/guide.pdf_3`
 
@@ -117,13 +118,15 @@
 
 **文件**：`src/services/data_load/chunk.py` → `ChunkHandler.markdown_parent_child_chunk()`
 
-**流程**：先用 `markdown_chunk()` 按标题层级切分出结构化的父文档（保留标题元数据），再对每个父文档用 `RecursiveCharacterTextSplitter` 切分出子文档。如果父文档本身不超过 `child_size`，则直接作为子文档使用。
+**流程**：先用 `markdown_chunk()` 按标题层级切分出结构化的父文档（保留标题元数据），再对每个父文档用
+`RecursiveCharacterTextSplitter` 切分出子文档。如果父文档本身不超过 `child_size`，则直接作为子文档使用。
 
 **parent_id 格式**：`{source文件路径}_md_{父文档序号}`，例如 `data/guide.md_md_5`
 
 **优势**：相比直接用 `parent_child_chunk()` 处理 Markdown，保留了标题层级结构信息（h1、h2、h3 等元数据），父文档边界与章节边界对齐。
 
 **通用返回值**：`(parent_store, child_docs)`
+
 - `parent_store`：`{parent_id: Document}` 父文档映射
 - `child_docs`：子文档列表，每个子文档的 `metadata` 中包含 `parent_id`
 
@@ -144,12 +147,12 @@
 
 **PostgreSQL 表结构**（`parent_documents`）：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| parent_id | VARCHAR(512) PK | 父文档唯一标识 |
-| content | TEXT | 父文档文本内容 |
-| metadata | JSONB | 元数据（source、file_type 等） |
-| created_at | TIMESTAMP | 创建时间 |
+| 字段         | 类型              | 说明                      |
+|------------|-----------------|-------------------------|
+| parent_id  | VARCHAR(512) PK | 父文档唯一标识                 |
+| content    | TEXT            | 父文档文本内容                 |
+| metadata   | JSONB           | 元数据（source、file_type 等） |
+| created_at | TIMESTAMP       | 创建时间                    |
 
 **代码位置**：`src/services/storage/postgres_connector.py` → `PostgreSQLConnector.batch_insert_parent_documents()`
 
@@ -170,6 +173,7 @@
 ```
 
 **关键方法**：`FusionRetrieve._resolve_parent_documents()`
+
 - 从检索结果中提取所有 `parent_id`
 - 去重后批量查询 PostgreSQL
 - 按检索顺序返回父文档内容
@@ -232,6 +236,97 @@ config/
     └── RagSystemConfig
         └── enable_parent_child_retrieval     # 父子文档检索开关
 ```
+
+---
+
+### 五、多模态入库（图片 + 表格）
+
+多模态入库与文字入库**解耦**：`DataDBStorage.ingest()` 文字入库完成后，通过 `asyncio.create_task` 异步触发图片和表格入库，不阻塞主流程。
+
+#### 5.1 图片入库
+
+**文件**：`src/services/data_load/data_storage.py` → `DataDBStorage._ingest_images_from_path()`
+
+**依赖**：`pypdf`（图片提取）、`transformers` + `torch`（CLIP 推理）、`pillow`（图片解码）
+
+**流程**：
+
+```
+PDF 文件
+  → pypdf 提取内嵌图片字节
+  → (可选) _generate_image_caption()：调用 VLM 生成图片描述
+  → CLIPEmbedding.embed_image_bytes()（asyncio.to_thread，线程池执行）
+  → MilvusImageClient.insert_images_async()
+  → 写入图片专用 Collection（{collection_name}_images）
+```
+
+**图片 Collection Schema**：
+
+| 字段             | 类型                | 说明                    |
+|----------------|-------------------|-----------------------|
+| `image_id`     | VARCHAR(256)      | MD5 唯一标识（主键）          |
+| `clip_vector`  | FLOAT_VECTOR(512) | CLIP 图片向量             |
+| `caption`      | VARCHAR(2048)     | VLM 生成的图片描述（增强文字检索召回） |
+| `source`       | VARCHAR(512)      | 来源文件路径                |
+| `page_idx`     | INT64             | 来源页码                  |
+| `image_base64` | VARCHAR(65535)    | 图片 base64 编码          |
+
+**VLM Caption 生成**（`_generate_image_caption()`）：
+
+- 配置 `CAPTION_MODEL_NAME` 环境变量后自动启用
+- 为每张图片生成文字描述，写入 `caption` 字段，提升图片的文字检索召回率
+- 未配置时跳过，`caption` 字段为空字符串
+
+**CLIP 模型配置**：
+
+```env
+# 使用 HuggingFace 在线模型（默认）
+CLIP_MODEL_PATH=openai/clip-vit-base-patch32
+
+# 使用本地模型（生产环境离线部署）
+CLIP_MODEL_PATH=/models/clip-vit-base-patch32
+```
+
+#### 5.2 表格入库
+
+**文件**：`src/services/data_load/data_storage.py` → `DataDBStorage._ingest_tables_from_path()`
+
+**依赖**：`pdfplumber`
+
+**流程**：
+
+```
+PDF 文件
+  → pdfplumber 提取表格（二维列表）
+  → _table_markdown_to_row_summary()：生成两种格式 chunk
+      ├─ Markdown 格式：| 列1 | 列2 | ... 保留原始结构
+      └─ 逐行摘要：第1行：列名为值，列名为值，...（自然语言，提升语义召回）
+  → MilvusExecutor.aadd_documents()
+  → 写入文字 Collection（与普通文本 chunk 共用同一 Collection）
+```
+
+**与图片入库并行执行**：
+
+```python
+# _ingest_images_from_path 内部
+table_task = asyncio.create_task(self._ingest_tables_from_path(data_path, collection_name))
+# ... 图片提取和 CLIP 向量化 ...
+inserted = await image_client.insert_images_async(all_image_records)
+await table_task  # 等待表格入库完成
+```
+
+#### 5.3 配置与安装
+
+```bash
+# 安装多模态依赖
+pip install -e ".[multimodal]"
+# 等价于：pip install pypdf pdfplumber transformers torch pillow
+```
+
+| 环境变量                 | 默认值                            | 说明                     |
+|----------------------|--------------------------------|------------------------|
+| `CLIP_MODEL_PATH`    | `openai/clip-vit-base-patch32` | CLIP 模型路径              |
+| `CAPTION_MODEL_NAME` | `""`                           | VLM Caption 生成模型，为空则跳过 |
 
 ---
 

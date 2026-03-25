@@ -2,16 +2,17 @@
 
 ### 一、现状分析
 
-当前项目的生成模块位于 `src/node/generate/generate.py`，通过 `generate_answer_for_query()` 和 `synthesize_final_subs()` 两个函数完成答案生成。在 `src/graph.py` 的 `_generate_current_answer()` 节点中被调用。
+当前项目的生成模块位于 `src/node/generate/generate.py`，通过 `generate_answer_for_query()` 和 `synthesize_final_subs()`
+两个函数完成答案生成。在 `src/graph.py` 的 `_generate_current_answer()` 节点中被调用。
 
-| 模块 | 当前实现 | 说明 |
-|------|:--------:|------|
-| 最终答案生成 | `final_system_prompt` + `ainvoke()` | 基于检索内容和对话历史生成 |
-| 子问题答案生成 | `sub_system_prompt` + `ainvoke()` | 基于 reasoning_context 和检索内容生成 |
-| 多跳综合 | `synthesize_system_prompt` + `ainvoke()` | 整合子问题答案生成最终回答 |
-| 来源引用 | 无 | Prompt 明确要求"不要提及【根据检索到的信息】" |
-| 流式输出 | 未实现 | 全部使用 `ainvoke()` 阻塞式返回 |
-| 推理过程展示 | 不可见 | `reasoning_context` 仅内部传递 |
+| 模块      |                   当前实现                   | 说明                           |
+|---------|:----------------------------------------:|------------------------------|
+| 最终答案生成  |   `final_system_prompt` + `ainvoke()`    | 基于检索内容和对话历史生成                |
+| 子问题答案生成 |    `sub_system_prompt` + `ainvoke()`     | 基于 reasoning_context 和检索内容生成 |
+| 多跳综合    | `synthesize_system_prompt` + `ainvoke()` | 整合子问题答案生成最终回答                |
+| 来源引用    |                    无                     | Prompt 明确要求"不要提及【根据检索到的信息】"  |
+| 流式输出    |                   未实现                    | 全部使用 `ainvoke()` 阻塞式返回       |
+| 推理过程展示  |                   不可见                    | `reasoning_context` 仅内部传递    |
 
 **主要局限性：**
 
@@ -97,13 +98,15 @@ async def generate_answer_for_query_stream(
 
 **配套改动**：
 
-- `_generate_current_answer()` 节点内部仍需收集完整答案（用于 reasoning_context 和 store 存储），但可通过 callback 机制将流式 token 推送到前端
+- `_generate_current_answer()` 节点内部仍需收集完整答案（用于 reasoning_context 和 store 存储），但可通过 callback 机制将流式
+  token 推送到前端
 - 前端通过 SSE（Server-Sent Events）或 WebSocket 接收流式 token
 - 保留 `ainvoke()` 版本作为非流式降级方案
 
 **Token 过滤机制（基于 tags 精确区分）**：
 
-LangGraph 的 `astream(stream_mode=["messages"])` 会捕获所有节点内通过 LLM 实例产生的 `AIMessageChunk`。为了精确区分**核心生成调用**（token 需要展示）和**辅助性调用**（token 不展示），采用 LangGraph 官方推荐的 **tags 标记机制**：
+LangGraph 的 `astream(stream_mode=["messages"])` 会捕获所有节点内通过 LLM 实例产生的 `AIMessageChunk`。为了精确区分*
+*核心生成调用**（token 需要展示）和**辅助性调用**（token 不展示），采用 LangGraph 官方推荐的 **tags 标记机制**：
 
 ```python
 # 核心生成函数：chain 加上 tags=["stream_to_user"]
@@ -124,6 +127,7 @@ if should_stream and node_name == "generate_current_answer" and is_multi_hop:
 ```
 
 **优势**：
+
 - 使用同一个 `self.llm` 实例，Langfuse 可完整追踪一条 trace
 - 精确过滤，即使同一节点内有多次 LLM 调用也能区分
 - 不需要创建额外的 LLM 实例
@@ -171,7 +175,8 @@ reasoning_steps = {
 
 #### 策略 4：reasoning_context 压缩（🔴 高优先级）
 
-**问题**：`_generate_current_answer()` 中 `reasoning_context` 每轮直接拼接 `f"问题：{current_q}\n答案：{answer}\n\n"`，无长度限制。当子问题较多或答案较长时，可能超出 LLM 上下文窗口。
+**问题**：`_generate_current_answer()` 中 `reasoning_context` 每轮直接拼接 `f"问题：{current_q}\n答案：{answer}\n\n"`
+，无长度限制。当子问题较多或答案较长时，可能超出 LLM 上下文窗口。
 
 **方案**：对 `reasoning_context` 设置最大 token 数，超过时使用 LLM 进行摘要压缩：
 
@@ -285,16 +290,41 @@ return {
 
 ---
 
+---
+
+### 策略 7：多模态生成（图片理解）✅ 已实现
+
+**问题**：原有生成模块只支持纯文字输入，无法利用检索到的图片内容。
+
+**实现**：新增 `generate_multimodal_answer()` 函数，将图片 base64 与文字内容一起传入 VLM（如 `qwen-vl-plus`）。
+
+**图片筛选逻辑**（`generate_node.py`）：
+
+- **子问题阶段不传图片**：`is_final=False` 时跳过图片，避免中间答案被无关图片干扰
+- **score 阈值过滤**：只传入 score ≥ `IMAGE_SCORE_THRESHOLD`（默认 0.25）的图片
+- **数量控制**：最多传入 `MAX_IMAGES_PER_QUERY`（默认 3）张，防止超出 VLM token 限制
+- **退化策略**：无合格图片或 VLM 调用异常时，自动退化为纯文字生成
+
+**配置**：
+
+```env
+QWEN_MODEL_NAME=qwen-vl-plus        # 需支持视觉的模型
+IMAGE_SCORE_THRESHOLD=0.25          # 图片相似度阈值
+MAX_IMAGES_PER_QUERY=3              # 最大图片数量
+```
+
+---
+
 ### 三、实施优先级总结
 
-| 优先级 | 优化项 | 涉及文件 | 实施难度 | 预期收益 |
-|:------:|--------|----------|:--------:|:--------:|
-| 🔴 高 | 答案来源引用 | `generate.py`、`graph.py`、`fusion_retrieve.py` | 中 | 高 |
-| 🔴 高 | 流式输出 | `generate.py`、`graph.py`、前端接入层 | 中 | 高 |
-| 🔴 高 | 推理过程透明化 | `graph.py`（`_prepare_next_step`、`_generate_current_answer`） | 中 | 高 |
-| 🔴 高 | reasoning_context 压缩 | `generate.py`、`graph.py` | 低 | 高 |
-| 🟡 中 | 置信度评分 | `graph.py`、`cross_encoder_ranker.py`、`fusion_retrieve.py` | 中 | 中 |
-| 🟡 中 | 子问题分解可视化 | `graph.py`（`_prepare_next_step`） | 低 | 中 |
+| 优先级  | 优化项                  | 涉及文件                                                        | 实施难度 | 预期收益 |
+|:----:|----------------------|-------------------------------------------------------------|:----:|:----:|
+| 🔴 高 | 答案来源引用               | `generate.py`、`graph.py`、`fusion_retrieve.py`               |  中   |  高   |
+| 🔴 高 | 流式输出                 | `generate.py`、`graph.py`、前端接入层                              |  中   |  高   |
+| 🔴 高 | 推理过程透明化              | `graph.py`（`_prepare_next_step`、`_generate_current_answer`） |  中   |  高   |
+| 🔴 高 | reasoning_context 压缩 | `generate.py`、`graph.py`                                    |  低   |  高   |
+| 🟡 中 | 置信度评分                | `graph.py`、`cross_encoder_ranker.py`、`fusion_retrieve.py`   |  中   |  中   |
+| 🟡 中 | 子问题分解可视化             | `graph.py`（`_prepare_next_step`）                            |  低   |  中   |
 
 ### 四、评估验证
 

@@ -19,6 +19,7 @@ from utils.message_util import get_conversation_context_adaptive
 from .generate import (
     generate_answer_for_query,
     generate_direct_chat_answer,
+    generate_multimodal_answer,
     synthesize_final_subs,
     compress_reasoning_context,
 )
@@ -97,15 +98,52 @@ class GenerateNodeMixin:
         else:
             is_final = len(state["sub_questions"]) == 1
 
-        # 生成答案
-        answer = await generate_answer_for_query(
-            self.llm,
-            query=current_q,
-            docs_content=docs,
-            conversation_context=conversation_context,
-            reasoning_context=state.get("reasoning_context", ""),
-            is_final=is_final,
-        )
+        # 生成答案：有图片时使用多模态生成，否则使用纯文字生成
+        retrieved_images = state.get("retrieved_images") or []
+
+        # 读取配置：score 阈值过滤 + 图片数量上限
+        try:
+            from config import MultimodalConfig
+            _mm_cfg = MultimodalConfig()
+            image_score_threshold = _mm_cfg.image_score_threshold
+            max_images_per_query = _mm_cfg.max_images_per_query
+        except Exception:
+            image_score_threshold = 0.25
+            max_images_per_query = 3
+
+        # 子问题阶段不传图片（is_final=False），避免中间答案被无关图片干扰
+        # 最终答案阶段：按 score 阈值过滤，取 top-N 张图片
+        qualified_images = []
+        if is_final:
+            for img in retrieved_images:
+                if hasattr(img, "image_base64") and img.image_base64:
+                    img_score = getattr(img, "score", 0.0)
+                    if img_score >= image_score_threshold:
+                        qualified_images.append(img)
+            # 按 score 降序，取前 max_images_per_query 张
+            qualified_images.sort(key=lambda img: getattr(img, "score", 0.0), reverse=True)
+            qualified_images = qualified_images[:max_images_per_query]
+
+        image_base64_list = [img.image_base64 for img in qualified_images]
+
+        if image_base64_list and is_final:
+            # 最终答案且有相关图片：调用多模态 VLM 生成
+            answer = await generate_multimodal_answer(
+                self.llm,
+                query=current_q,
+                docs_content=docs,
+                conversation_context=conversation_context,
+                image_base64_list=image_base64_list,
+            )
+        else:
+            answer = await generate_answer_for_query(
+                self.llm,
+                query=current_q,
+                docs_content=docs,
+                conversation_context=conversation_context,
+                reasoning_context=state.get("reasoning_context", ""),
+                is_final=is_final,
+            )
 
         # 最终答案附加置信度信息
         if is_final:

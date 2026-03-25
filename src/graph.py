@@ -31,6 +31,7 @@ class State(MessagesState):
     search_content: Optional[str]  # 检索内容整合（带来源编号）
     retrieved_documents: List[str]  # 检索到的文档列表，用于评估
     retrieval_scores: List[float]  # 重排序分数，用于置信度计算
+    retrieved_images: List  # CLIP 图片检索结果（RetrievedImage 列表），用于多模态生成
     run_count: int  # 运行次数
     grade_retry_count: int  # 当前子问题的评分重试计数（防止 grade 循环）
     answer: str

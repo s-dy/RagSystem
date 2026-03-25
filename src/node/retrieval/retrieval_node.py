@@ -287,11 +287,91 @@ class RetrievalNodeMixin:
             f"[RetrievalNode] 融合检索完成: unique_docs={len(unique_retrieved)}, reranked_docs={len(ordered_docs)}, avg_score={avg_score:.3f}"
         )
 
+        # 图片跨模态检索（CLIP）：与文字检索并行发起，用当前查询检索相关图片
+        retrieved_images = await self.__retrieve_images(
+            query=query,
+            router_index=state.get("router_index"),
+        )
+
+        # 混合图文 RRF 融合：将图片 CLIP score 归一化后与文字 rerank score 联合排序
+        # 图片按 score 降序已在 __retrieve_images 中完成，此处仅记录融合后的排名供生成节点使用
+        if retrieved_images and rerank_scores:
+            max_text_score = max(rerank_scores) if rerank_scores else 1.0
+            for image in retrieved_images:
+                # 将 CLIP 内积分数（0~1）归一化到与文字 rerank score 相同量级
+                image.rrf_score = image.score / max(max_text_score, 1e-6)
+            retrieved_images.sort(key=lambda img: img.rrf_score, reverse=True)
+
         return {
             "search_content": content,
             "retrieved_documents": retrieved_docs_text,
             "retrieval_scores": rerank_scores,
+            "retrieved_images": retrieved_images,
         }
+
+    async def __retrieve_images(
+        self, query: str, router_index: dict, top_k: int = 3
+    ) -> list:
+        """用文字查询通过 CLIP 跨模态检索相关图片（并行版本）。
+
+        对 router_index 中的所有 collection 并行发起图片检索，
+        结果按 image_id 去重后按 score 降序返回。
+
+        Args:
+            query: 当前查询文本（子问题或原始问题）
+            router_index: 路由索引，key 为 collection_name
+            top_k: 每个 collection 返回的图片数量上限
+
+        Returns:
+            RetrievedImage 列表，已按 score 降序排列，已按 image_id 跨 collection 去重
+        """
+        if not query or not router_index:
+            return []
+
+        try:
+            from src.services.storage.milvus_image_client import MilvusImageClient
+            from config import MilvusConfig
+
+            async def search_one_collection(collection_name: str) -> list:
+                try:
+                    image_client = MilvusImageClient(
+                        MilvusConfig(collection_name=collection_name)
+                    )
+                    # CLIP 文字向量化 + Milvus 检索均为同步阻塞，放入线程池执行
+                    return await asyncio.to_thread(
+                        image_client.search_by_text, query, top_k
+                    )
+                except Exception as collection_error:
+                    logger.debug(
+                        f"[RetrievalNode] 图片检索跳过 collection={collection_name}: {collection_error}"
+                    )
+                    return []
+
+            # 并行检索所有 collection
+            results_per_collection = await asyncio.gather(
+                *[search_one_collection(name) for name in router_index.keys()],
+                return_exceptions=False,
+            )
+
+            # 跨 collection 按 image_id 去重，保留最高分
+            seen_image_ids: set = set()
+            merged: list = []
+            for collection_images in results_per_collection:
+                for image in collection_images:
+                    if image.image_id not in seen_image_ids:
+                        seen_image_ids.add(image.image_id)
+                        merged.append(image)
+
+            # 按 score 降序排列
+            merged.sort(key=lambda img: img.score, reverse=True)
+
+            logger.info(
+                f"[RetrievalNode] 图片检索完成: query={query[:40]}, collections={len(router_index)}, found={len(merged)}"
+            )
+            return merged
+        except Exception as exc:
+            logger.warning(f"[RetrievalNode] 图片检索失败，跳过: {exc}")
+            return []
 
     async def __grade_documents(self, state, config: RunnableConfig, store: BaseStore):
         """检索结果评分节点：使用纯文本文档列表评分，避免来源编号干扰

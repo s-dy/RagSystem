@@ -79,6 +79,20 @@ class QueryEnhancementConfig:
 
 
 @dataclass
+class MultimodalConfig:
+    """多模态 RAG 配置"""
+
+    # CLIP 模型路径，支持本地路径（如 /models/clip-vit-base-patch32）或 HuggingFace 模型名
+    clip_model_path: str = os.getenv("CLIP_MODEL_PATH", "openai/clip-vit-base-patch32")
+    # 图片检索相似度阈值（CLIP 内积分数，范围 0~1），低于此值的图片将被过滤
+    image_score_threshold: float = float(os.getenv("IMAGE_SCORE_THRESHOLD", "0.25"))
+    # 每次查询最多传入 VLM 的图片数量（防止超出 token 限制）
+    max_images_per_query: int = int(os.getenv("MAX_IMAGES_PER_QUERY", "3"))
+    # VLM 生成图片 Caption 时使用的模型（为空则跳过 Caption 生成）
+    caption_model_name: str = os.getenv("CAPTION_MODEL_NAME", "")
+
+
+@dataclass
 class MilvusConfig:
     collection_name: str = os.getenv("MILVUS_COLLECTION_NAME", "default")
     host: str = os.getenv("MILVUS_HOST", "localhost")
@@ -106,8 +120,11 @@ def get_postgresql_url() -> str:
     cfg = PostgreSQLConfig()
     # 密码可能包含特殊字符，使用 urllib.parse.quote 进行编码
     from urllib.parse import quote
+
     encoded_password = quote(cfg.password, safe="")
-    return f"postgresql://{cfg.user}:{encoded_password}@{cfg.host}:{cfg.port}/{cfg.dbname}"
+    return (
+        f"postgresql://{cfg.user}:{encoded_password}@{cfg.host}:{cfg.port}/{cfg.dbname}"
+    )
 
 
 # 保留模块级变量以兼容可能直接导入 POSTGRESQL_URL 的其他模块

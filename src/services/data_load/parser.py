@@ -800,6 +800,120 @@ class PaddleOCRParser(Parser):
 
         return self._ocr_input(rendered_page, lang=lang, cls_enabled=cls_enabled)
 
+    def _extract_pdf_embedded_images(self, pdf_path: Path) -> List[Dict[str, Any]]:
+        """从 PDF 中提取嵌入的图片，返回图片字节和页码信息。
+
+        使用 pypdf 提取 PDF 内嵌图片，每张图片以 bytes 形式返回，
+        供后续 CLIP Embedding 和多模态检索使用。
+
+        Args:
+            pdf_path: PDF 文件路径
+
+        Returns:
+            图片信息列表，每项包含 type/data/name/page_idx 字段
+        """
+        images = []
+        try:
+            import pypdf
+
+            reader = pypdf.PdfReader(str(pdf_path))
+            for page_idx, page in enumerate(reader.pages):
+                for img_obj in page.images:
+                    images.append(
+                        {
+                            "type": "image",
+                            "data": img_obj.data,
+                            "name": img_obj.name,
+                            "page_idx": page_idx,
+                            "source": str(pdf_path),
+                        }
+                    )
+        except ImportError:
+            self.logger.warning(
+                "pypdf not installed, skipping embedded image extraction. "
+                "Install with: pip install pypdf"
+            )
+        except Exception as exc:
+            self.logger.warning(f"Failed to extract embedded images from PDF: {exc}")
+        return images
+
+    def _extract_pdf_tables(self, pdf_path: Path) -> List[Dict[str, Any]]:
+        """从 PDF 中提取表格，转换为 Markdown 格式保留结构。
+
+        使用 pdfplumber 提取表格，将二维列表转为 Markdown 表格字符串，
+        保留表格的行列结构，便于后续文本检索。
+
+        Args:
+            pdf_path: PDF 文件路径
+
+        Returns:
+            表格信息列表，每项包含 type/text/page_idx 字段
+        """
+        tables = []
+        try:
+            import pdfplumber
+
+            with pdfplumber.open(str(pdf_path)) as pdf:
+                for page_idx, page in enumerate(pdf.pages):
+                    for table in page.extract_tables():
+                        if not table:
+                            continue
+                        markdown_table = self._table_to_markdown(table)
+                        if markdown_table:
+                            tables.append(
+                                {
+                                    "type": "table",
+                                    "text": markdown_table,
+                                    "page_idx": page_idx,
+                                    "source": str(pdf_path),
+                                }
+                            )
+        except ImportError:
+            self.logger.warning(
+                "pdfplumber not installed, skipping table extraction. "
+                "Install with: pip install pdfplumber"
+            )
+        except Exception as exc:
+            self.logger.warning(f"Failed to extract tables from PDF: {exc}")
+        return tables
+
+    @staticmethod
+    def _table_to_markdown(table: List[List[Optional[str]]]) -> str:
+        """将二维列表格式的表格转换为 Markdown 表格字符串。
+
+        Args:
+            table: 二维列表，第一行视为表头
+
+        Returns:
+            Markdown 格式的表格字符串
+        """
+        if not table:
+            return ""
+
+        def clean_cell(cell) -> str:
+            if cell is None:
+                return ""
+            return str(cell).replace("\n", " ").replace("|", "\\|").strip()
+
+        rows = [[clean_cell(cell) for cell in row] for row in table]
+        if not rows:
+            return ""
+
+        header = rows[0]
+        separator = ["---"] * len(header)
+        data_rows = rows[1:]
+
+        lines = [
+            "| " + " | ".join(header) + " |",
+            "| " + " | ".join(separator) + " |",
+        ]
+        for row in data_rows:
+            # 补齐列数不一致的行
+            padded_row = row + [""] * (len(header) - len(row))
+            lines.append("| " + " | ".join(padded_row[: len(header)]) + " |")
+
+        return "\n".join(lines)
+
     def parse_pdf(
         self,
         pdf_path: Union[str, Path],
@@ -808,13 +922,36 @@ class PaddleOCRParser(Parser):
         lang: Optional[str] = None,
         **kwargs,
     ) -> List[Dict[str, Any]]:
+        """解析 PDF 文档，提取文字、嵌入图片和表格。
+
+        - 文字：通过 PaddleOCR 逐页 OCR 提取
+        - 嵌入图片：通过 pypdf 提取原始图片字节（type="image"）
+        - 表格：通过 pdfplumber 提取并转为 Markdown（type="table"）
+
+        Args:
+            pdf_path: PDF 文件路径
+            output_dir: 输出目录（暂未使用）
+            method: 解析方式（暂未使用，保留接口兼容）
+            lang: OCR 语言
+            **kwargs: 额外参数，支持 cls（是否启用方向分类）、
+                      extract_images（是否提取嵌入图片，默认 True）、
+                      extract_tables（是否提取表格，默认 True）
+
+        Returns:
+            内容块列表，每项为 dict，type 字段区分 text/image/table
+        """
         del output_dir, method
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
 
         cls_enabled = kwargs.get("cls", True)
+        should_extract_images = kwargs.get("extract_images", True)
+        should_extract_tables = kwargs.get("extract_tables", True)
+
         content_list: List[Dict[str, Any]] = []
+
+        # 1. OCR 提取文字
         page_inputs = self._extract_pdf_page_inputs(pdf_path)
         try:
             for page_idx, rendered_page in page_inputs:
@@ -826,10 +963,26 @@ class PaddleOCRParser(Parser):
                         {"type": "text", "text": text, "page_idx": int(page_idx)}
                     )
         finally:
-            # Ensure we promptly release PDF handles even if OCR fails mid-stream.
             close = getattr(page_inputs, "close", None)
             if callable(close):
                 close()
+
+        # 2. 提取嵌入图片（需要 pypdf）
+        if should_extract_images:
+            embedded_images = self._extract_pdf_embedded_images(pdf_path)
+            content_list.extend(embedded_images)
+            if embedded_images:
+                self.logger.info(
+                    f"Extracted {len(embedded_images)} embedded images from {pdf_path.name}"
+                )
+
+        # 3. 提取表格（需要 pdfplumber）
+        if should_extract_tables:
+            tables = self._extract_pdf_tables(pdf_path)
+            content_list.extend(tables)
+            if tables:
+                self.logger.info(f"Extracted {len(tables)} tables from {pdf_path.name}")
+
         return content_list
 
     def parse_image(
