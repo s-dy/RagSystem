@@ -100,7 +100,19 @@ class PostgreSQLConfig:
 REDIS_URI = os.getenv("REDIS_URI", "redis://localhost:6379")
 os.environ["REDIS_URL"] = REDIS_URI
 
-POSTGRESQL_URL = f"postgresql://{PostgreSQLConfig.user}:{PostgreSQLConfig.password}@{PostgreSQLConfig.host}:{PostgreSQLConfig.port}/{PostgreSQLConfig.dbname}"
+
+def get_postgresql_url() -> str:
+    """动态构建 PostgreSQL 连接 URL，每次调用时从环境变量读取最新值，避免模块加载时固化。"""
+    cfg = PostgreSQLConfig()
+    # 密码可能包含特殊字符，使用 urllib.parse.quote 进行编码
+    from urllib.parse import quote
+    encoded_password = quote(cfg.password, safe="")
+    return f"postgresql://{cfg.user}:{encoded_password}@{cfg.host}:{cfg.port}/{cfg.dbname}"
+
+
+# 保留模块级变量以兼容可能直接导入 POSTGRESQL_URL 的其他模块
+# 注意：此变量在模块加载时固化，新代码应改用 get_postgresql_url()
+POSTGRESQL_URL = get_postgresql_url()
 os.environ["POSTGRESQL_URL"] = POSTGRESQL_URL
 
 # MCP服务

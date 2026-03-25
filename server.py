@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, Request, UploadFile, File
@@ -19,7 +20,17 @@ from src.observability.logger import get_logger
 
 logger = get_logger(__name__)
 
-app = FastAPI(title="HybridRAG API")
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    """管理应用生命周期：启动时预热 Graph，关闭时释放 PostgreSQL 连接"""
+    yield
+    global rag_graph
+    if rag_graph is not None:
+        await rag_graph.close()
+        logger.info("[Server] Graph 连接已关闭")
+
+
+app = FastAPI(title="HybridRAG API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

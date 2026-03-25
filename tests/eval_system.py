@@ -18,7 +18,9 @@ import sys
 from datetime import datetime
 
 import psycopg
+
 from utils.environ import set_huggingface_hf_env
+
 set_huggingface_hf_env()
 
 # 确保项目根目录在 sys.path 中
@@ -30,7 +32,9 @@ sys.path.insert(0, PROJECT_ROOT)
 # ──────────────────────────────────────────────
 TEST_DB_NAME = "rag_system_test"
 TEST_COLLECTION_NAME = "eval_test_collection"
-TEST_PDF_PATH = os.path.join(PROJECT_ROOT, "tests", "test_data", "长安的荔枝 - 马伯庸.pdf")
+TEST_PDF_PATH = os.path.join(
+    PROJECT_ROOT, "tests", "test_data", "长安的荔枝 - 马伯庸.pdf"
+)
 QA_PAIR_PATH = os.path.join(PROJECT_ROOT, "tests", "qa_pair.json")
 REPORT_PATH = os.path.join(PROJECT_ROOT, "tests", "eval_report.json")
 
@@ -57,10 +61,14 @@ def patch_config():
     config.RagSystemConfig.enable_eval = False
     config.RagSystemConfig.enable_parent_child_retrieval = True
 
-    # 重新生成 POSTGRESQL_URL 并更新环境变量（config.py 中的模块级变量也需要覆盖）
+    # 重新生成 POSTGRESQL_URL 并更新环境变量
+    # 使用 get_postgresql_url() 的同等逻辑，但替换 dbname 为测试库
+    from urllib.parse import quote
+
+    pg = config.PostgreSQLConfig()
+    encoded_password = quote(pg.password, safe="")
     new_url = (
-        f"postgresql://{config.PostgreSQLConfig.user}:{config.PostgreSQLConfig.password}"
-        f"@{config.PostgreSQLConfig.host}:{config.PostgreSQLConfig.port}/{TEST_DB_NAME}"
+        f"postgresql://{pg.user}:{encoded_password}@{pg.host}:{pg.port}/{TEST_DB_NAME}"
     )
     config.POSTGRESQL_URL = new_url
     os.environ["POSTGRESQL_URL"] = new_url
@@ -78,6 +86,7 @@ def create_test_databases():
 
     ensure_postgres_database_exists()
     ensure_milvus_database_exists()
+
 
 # ──────────────────────────────────────────────
 # Step 3: 数据入库
@@ -97,12 +106,15 @@ async def ingest_test_data():
     result = await storage.ingest(ingest_config, TEST_PDF_PATH)
     # 将配置写入 PostgreSQL（用于查询路由）
     from src.services.storage import PostgreSQLConnector
-    PostgreSQLConnector().insert_knowledge_collection({
-        "index": TEST_COLLECTION_NAME,
-        "description": "测试知识库",
-        "domain": "general",
-        "keywords": [],
-    })
+
+    PostgreSQLConnector().insert_knowledge_collection(
+        {
+            "index": TEST_COLLECTION_NAME,
+            "description": "测试知识库",
+            "domain": "general",
+            "keywords": [],
+        }
+    )
     print(f"✅ 数据入库完成: {result}")
     return result
 
@@ -115,7 +127,9 @@ async def load_chunks_for_qa_generation():
     from src.services.data_load import DataDBStorage
 
     storage = DataDBStorage(collection_name=TEST_COLLECTION_NAME)
-    chunks = await storage.load_data_and_chunk(TEST_PDF_PATH, chunk_size=2048, chunk_overlap=128)
+    chunks = await storage.load_data_and_chunk(
+        TEST_PDF_PATH, chunk_size=2048, chunk_overlap=128
+    )
     return chunks
 
 
@@ -187,7 +201,7 @@ async def generate_qa_dataset():
         parsed = _parse_llm_json(response.content)
         if parsed:
             parsed["type"] = "multi_hop"
-            parsed["source_content"] = (content_a + " | " + content_b)
+            parsed["source_content"] = content_a + " | " + content_b
             qa_pairs.append(parsed)
             print(f"  ✅ 多跳问题 {index + 1}: {parsed['question']}")
 
@@ -273,39 +287,50 @@ async def run_rag_and_evaluate(qa_pairs: list[dict]):
         try:
             result = await graph.start(
                 {"messages": [HumanMessage(content=question)]},
-                {"configurable": {"thread_id": f"eval_{index}", "user_id": "eval_user"}},
+                {
+                    "configurable": {
+                        "thread_id": f"eval_{index}",
+                        "user_id": "eval_user",
+                    }
+                },
             )
 
             answer = result.get("answer", "")
             retrieved_documents = result.get("retrieved_documents", [])
 
-            rag_results.append({
-                "question": question,
-                "type": question_type,
-                "answer": answer,
-                "retrieved_documents": retrieved_documents,
-                "reference": reference,
-            })
+            rag_results.append(
+                {
+                    "question": question,
+                    "type": question_type,
+                    "answer": answer,
+                    "retrieved_documents": retrieved_documents,
+                    "reference": reference,
+                }
+            )
 
-            eval_samples.append(EvalSample(
-                user_input=question,
-                response=answer,
-                retrieved_contexts=retrieved_documents,
-                reference=reference if reference else None,
-            ))
+            eval_samples.append(
+                EvalSample(
+                    user_input=question,
+                    response=answer,
+                    retrieved_contexts=retrieved_documents,
+                    reference=reference if reference else None,
+                )
+            )
 
             print(f"  ✅ 回答: {answer}")
 
         except Exception as error:
             print(f"  ❌ RAG 调用失败: {error}")
-            rag_results.append({
-                "question": question,
-                "type": question_type,
-                "answer": "",
-                "retrieved_documents": [],
-                "reference": reference,
-                "error": str(error),
-            })
+            rag_results.append(
+                {
+                    "question": question,
+                    "type": question_type,
+                    "answer": "",
+                    "retrieved_documents": [],
+                    "reference": reference,
+                    "error": str(error),
+                }
+            )
 
     # 使用 RagEvaluator 批量评估
     if eval_samples:
@@ -340,8 +365,12 @@ def generate_report(report, rag_results: list[dict]):
     }
 
     # 按问题类型分组统计
-    single_hop_details = [d for d in (report.details if report else []) if d.get("type") == "single_hop"]
-    multi_hop_details = [d for d in (report.details if report else []) if d.get("type") == "multi_hop"]
+    single_hop_details = [
+        d for d in (report.details if report else []) if d.get("type") == "single_hop"
+    ]
+    multi_hop_details = [
+        d for d in (report.details if report else []) if d.get("type") == "multi_hop"
+    ]
 
     if single_hop_details:
         report_data["single_hop_summary"] = _compute_type_summary(single_hop_details)
@@ -356,7 +385,12 @@ def generate_report(report, rag_results: list[dict]):
 
 def _compute_type_summary(details: list[dict]) -> dict:
     """按问题类型计算平均分"""
-    metrics = ["faithfulness", "answer_relevancy", "context_relevance", "context_recall"]
+    metrics = [
+        "faithfulness",
+        "answer_relevancy",
+        "context_relevance",
+        "context_recall",
+    ]
     summary = {"count": len(details)}
     for metric in metrics:
         values = [

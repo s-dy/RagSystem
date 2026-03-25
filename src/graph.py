@@ -2,26 +2,26 @@ import asyncio
 from typing import List, Optional, Dict
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import MessagesState, StateGraph, START, END
+from langgraph.store.postgres.aio import AsyncPostgresStore
 
-from config import RagSystemConfig, POSTGRESQL_URL, PostgreSQLConfig
+from config import RagSystemConfig, get_postgresql_url, PostgreSQLConfig
 from src.core.adapter import CommonTaskAdapterHandler
 from src.core.memory_manager import MemoryManager
 from src.core.tools_pool import ToolsPool
+from src.node.generate import GenerateNodeMixin
+from src.node.retrieval import RetrievalNodeMixin
+from src.node.route import RouteNodeMixin
 from src.observability.langfuse_monitor import langfuse_handler
 from src.observability.logger import get_logger, set_request_id
 from src.services.cross_encoder_ranker import CrossEncoderRanker
 from src.services.grade_model import DocumentGrader
 from src.services.llm.models import get_qwen_model, get_embedding_model
 from src.services.task_analyzer import TaskCharacteristics
-from src.node.route import RouteNodeMixin
-from src.node.retrieval import RetrievalNodeMixin
-from src.node.generate import GenerateNodeMixin
-
 
 logger = get_logger(__name__)
+
 
 class State(MessagesState):
     original_query: str  # 原始查询
@@ -49,7 +49,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             config = RagSystemConfig()
         self.config = config
         self.llm = get_qwen_model()
-        self.embedding = get_embedding_model('qwen')
+        self.embedding = get_embedding_model("qwen")
         self.task_adapter_handlers = [CommonTaskAdapterHandler()]
         self._cross_encoder_ranker = None
         self._document_grader = None
@@ -57,6 +57,10 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         self.tools_pool = ToolsPool()
         self.memory_manager = MemoryManager()
         self.graph = None
+        # 持久化连接上下文，避免每次请求重新编译
+        self._conn_ctx = None
+        self._store_ctx = None
+        self._compile_lock = asyncio.Lock()
 
     @property
     def cross_encoder_ranker(self) -> CrossEncoderRanker:
@@ -69,50 +73,74 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
     def document_grader(self) -> DocumentGrader:
         """懒加载文档评分器，首次访问时才加载模型"""
         if self._document_grader is None:
-            self._document_grader = DocumentGrader(threshold=self.config.grader_threshold)
+            self._document_grader = DocumentGrader(
+                threshold=self.config.grader_threshold
+            )
         return self._document_grader
 
     async def _compile_graph(self):
-        """编译 graph，使用 PostgreSQL checkpointer + store 持久化
+        """编译 graph，使用 PostgreSQL checkpointer + store 持久化。
 
-        Returns:
-            (compiled_graph, (conn_ctx, store_ctx))
+        首次调用时建立连接并编译，后续调用直接复用已编译的 graph，
+        避免每次请求都重建连接池和重新编译 LangGraph。
         """
-        # 构建graph
-        workflow = await self._init_graph()
-        # 确保 PostgreSQL 数据库存在（POSTGRESQL_URL 直连，不经过 PostgreSQLConnector）
-        from src.services.storage.postgres_connector import ensure_postgres_database_exists
-        ensure_postgres_database_exists(PostgreSQLConfig())
-        # 初始化 PostgreSQL 存储
-        conn_ctx = AsyncPostgresSaver.from_conn_string(POSTGRESQL_URL)
-        store_ctx = AsyncPostgresStore.from_conn_string(POSTGRESQL_URL)
-        checkpointer = await conn_ctx.__aenter__()
-        store = await store_ctx.__aenter__()
-        await store.setup()
-        await checkpointer.setup()
-        self.memory_manager = MemoryManager(store)
-        graph = workflow.compile(
-            checkpointer=checkpointer,
-            store=store
-        ).with_config(callbacks=[langfuse_handler])
-        self.graph = graph
-        return graph, (conn_ctx, store_ctx)
+        # 已编译则直接返回，无需加锁（快路径）
+        if self.graph is not None:
+            return self.graph
+
+        # 加锁防止并发初始化时重复编译
+        async with self._compile_lock:
+            # 双重检查：加锁后再判断一次
+            if self.graph is not None:
+                return self.graph
+
+            workflow = await self._init_graph()
+
+            from src.services.storage.postgres_connector import (
+                ensure_postgres_database_exists,
+            )
+
+            ensure_postgres_database_exists(PostgreSQLConfig())
+
+            self._conn_ctx = AsyncPostgresSaver.from_conn_string(get_postgresql_url())
+            self._store_ctx = AsyncPostgresStore.from_conn_string(get_postgresql_url())
+            checkpointer = await self._conn_ctx.__aenter__()
+            store = await self._store_ctx.__aenter__()
+            await store.setup()
+            await checkpointer.setup()
+            self.memory_manager = MemoryManager(store)
+            self.graph = workflow.compile(
+                checkpointer=checkpointer,
+                store=store,
+            ).with_config(callbacks=[langfuse_handler])
+            logger.info("[Graph] LangGraph 编译完成，连接已建立")
+            return self.graph
+
+    async def close(self):
+        """释放 PostgreSQL 连接，应在应用关闭时调用"""
+        if self._store_ctx is not None:
+            await self._store_ctx.__aexit__(None, None, None)
+            self._store_ctx = None
+        if self._conn_ctx is not None:
+            await self._conn_ctx.__aexit__(None, None, None)
+            self._conn_ctx = None
+        self.graph = None
+        logger.info("[Graph] 连接已关闭")
 
     async def start(self, input_data: dict, config: RunnableConfig = None):
-        graph, ctx = await self._compile_graph()
+        graph = await self._compile_graph()
         # 设置请求ID用于日志追踪
-        thread_id = config.get("configurable", {}).get("thread_id", "unknown") if config else "unknown"
+        thread_id = (
+            config.get("configurable", {}).get("thread_id", "unknown")
+            if config
+            else "unknown"
+        )
         set_request_id(thread_id)
         try:
             return await graph.ainvoke(input_data, config)
         except Exception as e:
             logger.error(f"[Graph] 推理失败: {e}")
             raise
-        finally:
-            if ctx:
-                conn_ctx, store_ctx = ctx
-                await store_ctx.__aexit__(None, None, None)
-                await conn_ctx.__aexit__(None, None, None)
 
     async def start_stream(self, input_data: dict, config: RunnableConfig = None):
         """流式输出入口：逐 token 返回 LLM 生成内容和节点状态更新
@@ -124,10 +152,14 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             ):
                 print(event)  # {"type": "token", "content": "..."} 或 {"type": "node", ...}
         """
-        graph, ctx = await self._compile_graph()
-        
+        graph = await self._compile_graph()
+
         # 设置请求ID用于日志追踪
-        thread_id = config.get("configurable", {}).get("thread_id", "unknown") if config else "unknown"
+        thread_id = (
+            config.get("configurable", {}).get("thread_id", "unknown")
+            if config
+            else "unknown"
+        )
         set_request_id(thread_id)
 
         # 是否为多跳场景（用于控制 token 展示策略）
@@ -136,9 +168,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         try:
             # 使用 astream 并设置 stream_mode 实现逐 token 流式
             async for event_chunk in graph.astream(
-                    input_data,
-                    config,
-                    stream_mode=["messages", "updates", "custom"]
+                input_data, config, stream_mode=["messages", "updates", "custom"]
             ):
                 # 检查当前任务是否已被取消
                 current_task = asyncio.current_task()
@@ -157,6 +187,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
 
                         # 只处理 LLM 流式 token（AIMessageChunk），过滤掉节点返回的完整 AIMessage
                         from langchain_core.messages import AIMessageChunk
+
                         if not isinstance(msg_chunk, AIMessageChunk):
                             continue
 
@@ -165,7 +196,11 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                         # 多跳场景下，子问题的 token 不展示（由 is_multi_hop 控制）
                         chunk_tags = metadata.get("tags", [])
                         should_stream = "stream_to_user" in chunk_tags
-                        if should_stream and node_name == "generate_current_answer" and is_multi_hop:
+                        if (
+                            should_stream
+                            and node_name == "generate_current_answer"
+                            and is_multi_hop
+                        ):
                             should_stream = False
 
                         if should_stream and msg_chunk.content:
@@ -186,11 +221,15 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                             # 子问题分解可视化
                             if node_name == "prepare_next_step":
                                 reasoning_steps = node_output.get("reasoning_steps", [])
-                                if reasoning_steps and reasoning_steps[0].get("sub_questions"):
+                                if reasoning_steps and reasoning_steps[0].get(
+                                    "sub_questions"
+                                ):
                                     is_multi_hop = True
                                     yield {
                                         "type": "decomposition",
-                                        "sub_questions": reasoning_steps[0]["sub_questions"],
+                                        "sub_questions": reasoning_steps[0][
+                                            "sub_questions"
+                                        ],
                                     }
 
                             # 子问题中间答案 / 单跳最终答案
@@ -201,7 +240,9 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                                     if is_multi_hop and not latest_step.get("is_final"):
                                         yield {
                                             "type": "sub_answer",
-                                            "sub_question": latest_step.get("sub_question", ""),
+                                            "sub_question": latest_step.get(
+                                                "sub_question", ""
+                                            ),
                                             "answer": latest_step.get("answer", ""),
                                         }
 
@@ -211,50 +252,49 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         except asyncio.CancelledError:
             logger.warning("[Graph] 流式推理被取消: 正在清理资源")
             raise
-        finally:
-            if ctx:
-                conn_ctx, store_ctx = ctx
-                await store_ctx.__aexit__(None, None, None)
-                await conn_ctx.__aexit__(None, None, None)
 
     async def _init_graph(self):
         graph = StateGraph(State)
 
         # 统一节点（使用修饰后的名称访问 Mixin 中的双下划线方法）
-        graph.add_node('retrieve_or_respond', self._RouteNodeMixin__retrieve_or_respond)
-        graph.add_node('prepare_next_step', self._RouteNodeMixin__prepare_next_step)
-        graph.add_node('enhance_and_route_current', self._RouteNodeMixin__enhance_and_route_current)
-        graph.add_node('fusion_retrieve', self._RetrievalNodeMixin__fusion_retrieve)
-        graph.add_node('generate_current_answer', self._GenerateNodeMixin__generate_current_answer)
-        graph.add_node('synthesize', self._GenerateNodeMixin__synthesize)
-        graph.add_node('final', self._GenerateNodeMixin__final)
+        graph.add_node("retrieve_or_respond", self._RouteNodeMixin__retrieve_or_respond)
+        graph.add_node("prepare_next_step", self._RouteNodeMixin__prepare_next_step)
+        graph.add_node(
+            "enhance_and_route_current", self._RouteNodeMixin__enhance_and_route_current
+        )
+        graph.add_node("fusion_retrieve", self._RetrievalNodeMixin__fusion_retrieve)
+        graph.add_node(
+            "generate_current_answer", self._GenerateNodeMixin__generate_current_answer
+        )
+        graph.add_node("synthesize", self._GenerateNodeMixin__synthesize)
+        graph.add_node("final", self._GenerateNodeMixin__final)
 
         # 图结构
-        graph.add_edge(START, 'retrieve_or_respond')
+        graph.add_edge(START, "retrieve_or_respond")
 
         # 路由：是否需要检索
         graph.add_conditional_edges(
-            'retrieve_or_respond',
-            lambda s: 'final' if not s.get('need_retrieval') else 'prepare_next_step',
-            {'final': 'final', 'prepare_next_step': 'prepare_next_step'}
+            "retrieve_or_respond",
+            lambda s: "final" if not s.get("need_retrieval") else "prepare_next_step",
+            {"final": "final", "prepare_next_step": "prepare_next_step"},
         )
 
         # 统一流程
-        graph.add_edge('prepare_next_step', 'enhance_and_route_current')
-        graph.add_edge('enhance_and_route_current', 'fusion_retrieve')
+        graph.add_edge("prepare_next_step", "enhance_and_route_current")
+        graph.add_edge("enhance_and_route_current", "fusion_retrieve")
         graph.add_conditional_edges(
-            'fusion_retrieve',
+            "fusion_retrieve",
             self._RetrievalNodeMixin__grade_documents,
-            {'good':'generate_current_answer','bad':'enhance_and_route_current'}
+            {"good": "generate_current_answer", "bad": "enhance_and_route_current"},
         )
         # 条件循环：检查是否还有子问题
         graph.add_conditional_edges(
-            'generate_current_answer',
-            lambda s: 'continue' if s.get('sub_questions') else 'done',
-            {'continue': 'prepare_next_step', 'done': 'synthesize'}
+            "generate_current_answer",
+            lambda s: "continue" if s.get("sub_questions") else "done",
+            {"continue": "prepare_next_step", "done": "synthesize"},
         )
         # 注意多跳问题需要走完sub_questions后在走一次generate_current_answer生成最终原始问题的答案
-        graph.add_edge('synthesize','final')
-        graph.add_edge('final', END)
+        graph.add_edge("synthesize", "final")
+        graph.add_edge("final", END)
 
         return graph
