@@ -7,6 +7,9 @@
 - _run_eval: RAG 评估
 """
 
+import re
+from typing import List
+
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
@@ -25,6 +28,55 @@ logger = get_logger(__name__)
 
 class GenerateNodeMixin:
     """生成节点方法集合，通过 Mixin 注入到 Graph 类"""
+
+    @staticmethod
+    def _extract_cited_source_ids(search_content: str) -> List[int]:
+        """从 search_content 中提取所有来源编号。
+
+        search_content 格式约定为：每段来源以 "[编号]" 开头，如 "[1] 内容..."。
+        提取所有出现的编号，返回去重后的有序列表。
+
+        Args:
+            search_content: 检索内容整合字符串（带来源编号）
+
+        Returns:
+            来源编号列表，如 [1, 2, 3]
+        """
+        if not search_content:
+            return []
+        source_ids = [int(match) for match in re.findall(r"\[(\d+)\]", search_content)]
+        return sorted(set(source_ids))
+
+    @staticmethod
+    def _build_citation_summary(reasoning_steps: List[dict]) -> str:
+        """根据所有子问题的推理步骤，构建引用溯源摘要字符串。
+
+        遍历每个 sub_answer 步骤，汇总其 cited_sources，生成如下格式的摘要：
+            📎 **引用溯源**：
+            - 子问题1 → 来源 [1][3]
+            - 子问题2 → 来源 [2]
+
+        Args:
+            reasoning_steps: State 中的 reasoning_steps 列表
+
+        Returns:
+            格式化的引用溯源字符串，若无引用则返回空字符串
+        """
+        citation_lines = []
+        for step in reasoning_steps:
+            if step.get("type") != "sub_answer":
+                continue
+            cited = step.get("cited_sources", [])
+            if not cited:
+                continue
+            sub_q = step.get("sub_question", "")
+            display_q = sub_q[:40] + "..." if len(sub_q) > 40 else sub_q
+            source_refs = "".join(f"[{sid}]" for sid in cited)
+            citation_lines.append(f"- {display_q} → 来源 {source_refs}")
+
+        if not citation_lines:
+            return ""
+        return "📎 **引用溯源**：\n" + "\n".join(citation_lines)
 
     async def __generate_current_answer(
         self, state, config: RunnableConfig, store: BaseStore
@@ -88,13 +140,15 @@ class GenerateNodeMixin:
             self.llm, new_reasoning_context
         )
 
-        # 记录推理步骤
+        # 记录推理步骤，同时追踪当前子问题引用的来源文档编号
         existing_steps = state.get("reasoning_steps", [])
+        cited_sources = self._extract_cited_source_ids(state.get("search_content", ""))
         sub_answer_step = {
             "type": "sub_answer",
             "sub_question": current_q,
             "answer": answer,
             "is_final": is_final,
+            "cited_sources": cited_sources,  # 本步骤引用的来源编号列表，如 [1, 2, 3]
         }
 
         thread_id = config["configurable"].get("thread_id", "default")
@@ -126,7 +180,7 @@ class GenerateNodeMixin:
     async def __synthesize(
         self, state, config: RunnableConfig, store: BaseStore
     ) -> dict:
-        """合并答案"""
+        """合并多跳子问题答案，并在最终答案中附加完整的引用溯源信息"""
         if not state["task_characteristics"].is_multi_hop:
             return {}
         logger.info("[GenerateNode] 开始综合多跳答案")
@@ -137,8 +191,15 @@ class GenerateNodeMixin:
             query=question,
             reasoning_context=reasoning_ctx,
         )
-        logger.info(f"[GenerateNode] 多跳答案综合完成: answer_length={len(answer)}")
 
+        # 汇总所有子问题的引用来源，生成溯源摘要附加到答案末尾
+        citation_summary = self._build_citation_summary(
+            state.get("reasoning_steps", [])
+        )
+        if citation_summary:
+            answer = answer + "\n\n" + citation_summary
+
+        logger.info(f"[GenerateNode] 多跳答案综合完成: answer_length={len(answer)}")
         return {"answer": answer}
 
     async def __final(self, state, config: RunnableConfig):

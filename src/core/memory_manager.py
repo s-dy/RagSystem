@@ -162,10 +162,56 @@ class MemoryManager:
     async def search_related_memories(
         self, user_id: str, query: str, limit: int = 5
     ) -> List[Dict]:
-        """基于分词关键词匹配搜索相关记忆，自动过滤已过期的条目"""
+        """基于向量语义搜索相关记忆，自动过滤已过期的条目。
+
+        优先使用 AsyncPostgresStore 原生的语义搜索（需要 LangGraph Store 配置了
+        embedding 函数）；若语义搜索不可用，则回退到关键词匹配作为兜底。
+
+        Args:
+            user_id: 用户 ID，用于限定搜索范围
+            query: 搜索查询文本
+            limit: 返回结果数量上限
+
+        Returns:
+            相关记忆列表，按相关性降序排列
+        """
         if not self.store:
             return []
 
+        results = []
+
+        # 优先尝试 AsyncPostgresStore 的语义搜索（传入 query 参数触发向量检索）
+        try:
+            items = await self.store.asearch(
+                ("memory",),
+                query=query,
+                filter={"namespace_prefix": f"conversation:{user_id}"},
+                limit=limit * 2,  # 多取一些，过滤过期后仍能满足 limit
+            )
+            for item in items:
+                if not (item.value and isinstance(item.value, dict)):
+                    continue
+                if self._is_expired(item.value):
+                    try:
+                        await self.store.adelete(("memory",), item.key)
+                    except Exception:
+                        pass
+                    continue
+                results.append(item.value)
+                if len(results) >= limit:
+                    break
+
+            if results:
+                logger.debug(
+                    f"[MemoryManager] 向量搜索相关记忆: user={user_id}, query={query[:30]}, count={len(results)}"
+                )
+                return results
+        except Exception as semantic_error:
+            logger.debug(
+                f"[MemoryManager] 向量搜索不可用，回退到关键词匹配: {semantic_error}"
+            )
+
+        # 回退：关键词匹配（兜底策略）
         import jieba
 
         keywords = [word for word in jieba.cut(query) if len(word) > 1]
@@ -173,7 +219,6 @@ class MemoryManager:
             return []
 
         prefixes = [f"conversation:{user_id}:", f"context:{user_id}:"]
-        results = []
         for prefix in prefixes:
             items = await self.store.asearch(
                 ("memory",), filter={"prefix": prefix}, limit=100
@@ -194,8 +239,9 @@ class MemoryManager:
                     break
             if len(results) >= limit:
                 break
+
         logger.debug(
-            f"[MemoryManager] 搜索相关记忆: user={user_id}, keywords={keywords[:3]}, count={len(results)}"
+            f"[MemoryManager] 关键词搜索相关记忆: user={user_id}, keywords={keywords[:3]}, count={len(results)}"
         )
         return results
 
