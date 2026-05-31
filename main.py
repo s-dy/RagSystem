@@ -1,7 +1,12 @@
+import os
+import asyncio
+
+if os.name == "nt":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import uvicorn
 
 from config import LoggingConfig
-from server import app
 from src.observability.logger import setup_logger
 
 if __name__ == "__main__":
@@ -16,4 +21,10 @@ if __name__ == "__main__":
         max_bytes=log_config.max_bytes,
         backup_count=log_config.backup_count,
     )
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8000,
+        loop="asyncio",
+        reload=True,
+    )

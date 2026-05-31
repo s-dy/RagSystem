@@ -1,3 +1,12 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+import asyncio
+import sys
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from utils.environ import set_huggingface_hf_env
 
 set_huggingface_hf_env()
@@ -221,7 +230,7 @@ async def _evaluate_and_log(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    test_name = "stream"
+    test_name = "single"
 
     test_map = {
         "single": test_single_hop,

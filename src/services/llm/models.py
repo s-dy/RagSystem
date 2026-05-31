@@ -7,9 +7,9 @@ load_dotenv()
 
 def get_qwen_model(**kwargs):
     return init_chat_model(
-        os.getenv('QWEN_MODEL_NAME'),
-        api_key=os.getenv('QWEN_API_KEY'),
-        base_url=os.getenv('QWEN_BASE_URL'),
+        os.getenv('DASHSCOPE_MODEL_NAME'),
+        api_key=os.getenv('DASHSCOPE_API_KEY'),
+        base_url=os.getenv('DASHSCOPE_BASE_URL'),
         model_provider='openai',
         **kwargs
     )
