@@ -1,4 +1,7 @@
-## 文档上传与入库链路架构
+# 文档上传与入库链路架构
+
+> **最后更新**：2026-06-07  
+> **当前状态**：完整支持 PDF/DOCX/Markdown，表格提取与增强、图片 CLIP 检索已实现
 
 ### 整体流程
 
@@ -76,9 +79,70 @@ GET /api/knowledge/ingest-status/{collection_name}
 
 ### 分块策略
 
-| 策略                            | 适用场景             | 说明                         |
-|-------------------------------|------------------|----------------------------|
-| `recursive_chunk`             | PDF、DOCX 等非结构化文档 | 使用中文优化分隔符递归切分              |
-| `markdown_chunk`              | Markdown 文档      | 先按标题层级切分，超长章节再递归切分         |
-| `parent_child_chunk`          | 需要上下文回溯的场景       | 大 chunk 作为父文档，小 chunk 用于检索 |
-| `markdown_parent_child_chunk` | Markdown + 父子文档  | 标题层级切分出父文档，再切分子文档          |
+| 策略                            | 适用场景             | 说明                         | 状态 |
+|-------------------------------|------------------|----------------------------|------|
+| `recursive_chunk`             | PDF、DOCX 等非结构化文档 | 使用中文优化分隔符递归切分              | ✅ 已完成 |
+| `markdown_chunk`              | Markdown 文档      | 先按标题层级切分，超长章节再递归切分         | ✅ 已完成 |
+| `parent_child_chunk`          | 需要上下文回溯的场景       | 大 chunk 作为父文档，小 chunk 用于检索 | ✅ 已完成 |
+| `markdown_parent_child_chunk` | Markdown + 父子文档  | 标题层级切分出父文档，再切分子文档          | ✅ 已完成 |
+
+### 表格提取与增强（✅ 已实现）
+
+**实现位置**：`src/services/data_load/parser.py` → `_extract_pdf_tables()`
+
+**处理流程**：
+
+```
+PDF 表格 (pdfplumber)
+    ↓
+┌─────────────────────────────────────┐
+│ 并行生成两种格式的 chunk：            │
+│                                     │
+│ 1. Markdown 格式 chunk              │
+│    - 保留表格结构                    │
+│    - 适合精确匹配                    │
+│    - 写入 Milvus 文字 Collection     │
+│                                     │
+│ 2. 逐行自然语言摘要 chunk            │
+│    - 每行转换为自然语言描述           │
+│    - 提升语义检索召回率               │
+│    - 写入 Milvus 文字 Collection     │
+└─────────────────────────────────────┘
+```
+
+**优势**：
+
+- Markdown 格式保留原始结构，便于精确查询
+- 自然语言摘要提升语义检索的召回率
+- 双格式互补，覆盖不同检索场景
+
+### 图片提取与 CLIP 检索（✅ 已实现）
+
+**实现位置**：`src/services/data_load/parser.py` → `_extract_pdf_embedded_images()`
+
+**处理流程**：
+
+```
+PDF 内嵌图片 (pypdf)
+    ↓
+┌─────────────────────────────────────┐
+│ 异步后台任务 (_ingest_images_from_path) │
+│                                     │
+│ 1. 提取图片字节                       │
+│ 2. (可选) VLM 生成 Caption           │
+│ 3. CLIP Embedding (线程池)           │
+│ 4. MilvusImageClient 入库            │
+│    - 图片 Collection: {name}_images  │
+│    - 字段: image_id, clip_vector,    │
+│           caption, source, page_idx, │
+│           image_base64               │
+└─────────────────────────────────────┘
+```
+
+**特点**：
+
+- 与文字入库解耦，不阻塞主流程
+- CLIP 推理通过 `asyncio.to_thread` 放入线程池
+- 支持本地模型缓存和 HuggingFace 在线下载
+
+详细说明见 [`docs/multimodal_rag/architecture.md`](../multimodal_rag/architecture.md)。

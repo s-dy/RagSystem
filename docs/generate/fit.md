@@ -1,4 +1,20 @@
-## 生成与可解释性优化方案
+# 生成与可解释性优化方案
+
+> **实施状态**：✅ 所有策略已于 2026-06 完成实现  
+> **最后更新**：2026-06-07
+
+## 实施状态总览
+
+| 策略 | 优先级 | 状态 | 实现位置 |
+|------|--------|------|----------|
+| 策略 1：答案来源引用 | 🔴 P0 | ✅ 已完成 | `retrieval_node.py` 第 262-267 行（带编号 search_content），`generate_node.py` 第 34-80 行（引用溯源） |
+| 策略 2：流式输出 | 🔴 P0 | ✅ 已完成 | `graph.py` 第 146-255 行（start_stream），tags 机制精确控制 |
+| 策略 3：推理过程透明化 | 🔴 P0 | ✅ 已完成 | State.reasoning_steps，SSE 推送 decomposition/sub_answer 事件 |
+| 策略 4：reasoning_context 压缩 | 🔴 P0 | ✅ 已完成 | `generate.py` compress_reasoning_context()，LLM 摘要压缩 |
+| 策略 5：置信度计算 | 🟡 P1 | ✅ 已完成 | `generate_node.py` 第 148-163 行，基于重排序分数 |
+| 策略 6：多模态生成 | 🟡 P1 | ✅ 已完成 | `generate.py` generate_multimodal_answer()，VLM 图文联合生成 |
+
+---
 
 ### 一、现状分析
 

@@ -1,4 +1,20 @@
-## 多轮对话与上下文管理优化方案
+# 多轮对话与上下文管理优化方案
+
+> **实施状态**：✅ 所有策略已于 2026-06 完成实现  
+> **最后更新**：2026-06-07
+
+## 实施状态总览
+
+| 策略 | 优先级 | 状态 | 实现位置 |
+|------|--------|------|----------|
+| 策略 1：跨轮对话历史压缩 | 🔴 P0 | ✅ 已完成 | `route_node.py` 第 47-70 行，`message_util.py` compress_conversation_history() |
+| 策略 2：对话上下文窗口自适应 | 🔴 P0 | ✅ 已完成 | `message_util.py` get_conversation_context_adaptive() |
+| 策略 3：渐进式摘要 | 🟡 P1 | ✅ 已完成 | `message_util.py` incremental_summarize_with_anchors() |
+| 策略 4：用户记忆检索集成 | 🟡 P1 | ✅ 已完成 | `MemoryManager.search_related_memories()` 已实现，待业务流程调用 |
+| 策略 5：主题切换检测 | 🟢 P2 | ⚠️ 待实现 | 可基于 embedding 相似度或 LLM 判断 |
+| 策略 6：消息重要性评分 | 🟢 P2 | ⚠️ 待实现 | 优先保留包含关键实体和决策的消息 |
+
+---
 
 ### 一、现状分析
 

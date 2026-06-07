@@ -1,4 +1,10 @@
-RAG 系统设计分析报告
+# RAG 系统设计分析与改进记录
+
+> **文档说明**：本文档记录了 HybridRAG 系统在开发过程中识别的问题及修复状态。
+> 
+> **最后更新**：2026-06-07  
+> **当前版本状态**：大部分高优先级问题已修复，系统已进入稳定运行阶段
+
 基于对项目全部核心模块的深入审查，以下是按 7 个维度的详细分析。
 
 一、数据检索效率
@@ -29,7 +35,7 @@ RAG 系统设计分析报告
 文档合并评分丢失细节	grade_model.py 第 38-39 行，将所有文档 "\n".join() 后计算单一相似度	🔴 高
 重排序阈值过高	cross_encoder_ranker.py 第 39 行，阈值 0.8 可能过滤掉大量有用文档	🟡 中
 阈值硬编码	检索过滤 0.2、重排序 0.8、评分 0.7 均为固定值，未根据场景动态调整	🟡 中
-缺少置信度评分	生成答案时没有对答案可信度进行评估	🟡 中 -- 已修复
+缺少置信度评分	生成答案时没有对答案可信度进行评估	🟡 中 ✅ **已于 2026-06 修复**（generate_node.py 第 148-163 行，基于重排序分数计算置信度）
 LLM 调用无重试	src/services/llm/models.py 中模型调用没有重试和超时配置	🟡 中
 改进建议：
 
@@ -54,10 +60,10 @@ DocumentGrader.grade() 应逐文档评分，而非合并后评分，返回每个
 四、可解释性
 ❌ 严重不足
 问题	位置	严重性
-答案来源不可追溯	generate.py 第 26 行 Prompt 要求"不要提及【根据检索到的信息】"	🔴 高 -- 已修复
-推理过程不透明	多跳推理的 reasoning_context 仅内部传递，不对用户展示	🔴 高 -- 已修复
-缺少置信度信息	重排序分数仅用于内部过滤，不对用户展示	🟡 中 -- 已修复
-子问题分解不可见	用户无法看到问题被分解成了哪些子问题	🟡 中 -- 已修复
+答案来源不可追溯	generate.py 第 26 行 Prompt 要求"不要提及【根据检索到的信息】"	🔴 高 ✅ **已于 2026-06 修复**（search_content 带来源编号 [1][2][3]，引用溯源自动生成）
+推理过程不透明	多跳推理的 reasoning_context 仅内部传递，不对用户展示	🔴 高 ✅ **已于 2026-06 修复**（reasoning_steps 记录完整推理链，前端通过 SSE 展示分解和中间答案）
+缺少置信度信息	重排序分数仅用于内部过滤，不对用户展示	🟡 中 ✅ **已于 2026-06 修复**（最终答案附加置信度标注：高/中/低 + 平均分 + 参考来源数）
+子问题分解不可见	用户无法看到问题被分解成了哪些子问题	🟡 中 ✅ **已于 2026-06 修复**（decomposition 事件通过 SSE 推送，展示子问题列表）
 改进建议：
 
 在答案末尾附加引用来源（如 [来源1]、[来源2]），并提供文档标题/链接
@@ -67,9 +73,9 @@ DocumentGrader.grade() 应逐文档评分，而非合并后评分，返回每个
 五、用户体验
 ⚠️ 存在的问题
 问题	位置	严重性
-未实现流式输出	_generate_current_answer() 使用 await ainvoke() 而非 astream()	🔴 高 -- 已修复
-进度反馈仅在日志	monitor_task_status() 仅写日志，用户端无感知	🟡 中
-Langfuse 监控未集成	langfuse_handler 创建了但未在 graph 中使用，且缺少认证配置	🔴 高
+未实现流式输出	_generate_current_answer() 使用 await ainvoke() 而非 astream()	🔴 高 ✅ **已于 2026-06 修复**（graph.start_stream() 实现 SSE 流式输出，tags 机制精确控制 token 展示）
+进度反馈仅在日志	monitor_task_status() 仅写日志，用户端无感知	🟡 中 ✅ **部分修复**（retrieval_progress 事件推送检索进度，心跳保活防止超时）
+Langfuse 监控未集成	langfuse_handler 创建了但未在 graph 中使用，且缺少认证配置	🔴 高 ✅ **已于 2026-06 修复**（graph.py 第 116 行注入 langfuse_handler 作为 callback）
 改进建议：
 
 将 generate_answer_for_query() 改为流式输出，使用 astream() 逐 token 返回
@@ -105,9 +111,9 @@ MCP 工具初始化失败静默	ToolsPool.init_mcp_tools() 某个 server 失败�
 考虑用 LLM 辅助判断是否为多跳问题，而非纯规则
 上下文压缩
 问题	位置	严重性
-get_recent_conversation_memories() 返回空列表	memory_manager.py 第 57-60 行，注释"由于 RedisStore 的限制，这里简化实现"	🔴 高  -- 已修复
-reasoning_context 无限增长	_generate_current_answer() 第 496 行，每个子问题答案都追加，无截断	🔴 高 -- 已修复
-长消息无截断	get_conversation_context() 完整包含每条消息，可能导致 token 溢出	🟡 中  -- 已修复
+get_recent_conversation_memories() 返回空列表	memory_manager.py 第 57-60 行，注释"由于 RedisStore 的限制，这里简化实现"	🔴 高 ✅ **已于 2026-06 修复**（MemoryManager 使用 AsyncPostgresStore 持久化存储）
+reasoning_context 无限增长	_generate_current_answer() 第 496 行，每个子问题答案都追加，无截断	🔴 高 ✅ **已于 2026-06 修复**（compress_reasoning_context() 超过阈值时 LLM 摘要压缩）
+长消息无截断	get_conversation_context() 完整包含每条消息，可能导致 token 溢出	🟡 中 ✅ **已于 2026-06 修复**（get_conversation_context_adaptive() 自适应窗口，token 预算内保留原文，超出部分摘要）
 改进建议：
 
 实现 get_recent_conversation_memories()，使用 Redis 的 ZRANGEBYSCORE 按时间范围获取
@@ -115,7 +121,7 @@ reasoning_context 无限增长	_generate_current_answer() 第 496 行，每个�
 对长消息进行截断或摘要，确保总 token 数不超过模型上下文窗口
 多轮对话
 问题	位置	严重性
-固定窗口大小	message_util.py 固定取最近 3 条消息	🟡 中 -- 已修复
+固定窗口大小	message_util.py 固定取最近 3 条消息	🟡 中 ✅ **已于 2026-06 修复**（get_conversation_context_adaptive() 动态调整窗口，max_context_tokens=2000）
 无重要性过滤	所有消息同等对待	🟡 中
 无显式指代消解	依赖 LLM 自行处理代词	🟡 中
 改进建议：
@@ -123,16 +129,75 @@ reasoning_context 无限增长	_generate_current_answer() 第 496 行，每个�
 动态调整窗口大小：根据消息长度和 token 预算自适应
 引入消息重要性评分，优先保留包含关键实体和决策的消息
 在查询增强阶段显式进行指代消解（当前 _expand_rewrite_query_with_coref 已有基础，可加强）
-📊 优先级排序
-优先级	改进项	影响范围
-🔴 P0	实现 reasoning_context 压缩/截断	多跳推理可靠性
-🔴 P0	文档逐条评分替代合并评分	检索准确性
-🔴 P0	工具调用添加超时控制	系统稳定性
-🔴 P0	集成 Langfuse 监控	可观测性
-🟡 P1	流式输出	用户体验
-🟡 P1	答案来源引用	可解释性
-🟡 P1	内部/外部检索并行化	检索效率
-🟡 P1	子问题答案质量验证	多跳准确性
-🟢 P2	语义去重 + MMR 多样性	结果多样性
-🟢 P2	动态对话窗口	多轮对话
-🟢 P2	查询结果缓存	检索效率
+---
+
+## 📊 当前系统状态总结（2026-06）
+
+### ✅ 已完成的核心功能
+
+| 功能模块 | 状态 | 实现位置 |
+|---------|------|----------|
+| **流式输出** | ✅ 完成 | `graph.start_stream()` - SSE 逐 token 推送 |
+| **引用溯源** | ✅ 完成 | `search_content` 带来源编号，`_build_citation_summary()` 生成完整引用链 |
+| **置信度计算** | ✅ 完成 | `generate_node.py` 基于重排序分数计算高/中/低置信度 |
+| **推理过程可视化** | ✅ 完成 | `reasoning_steps` 记录分解、中间答案，SSE 推送 |
+| **对话历史压缩** | ✅ 完成 | 跨轮压缩 + 渐进式摘要 + 自适应窗口 |
+| **reasoning_context 压缩** | ✅ 完成 | `compress_reasoning_context()` LLM 摘要压缩 |
+| **多模态图片检索** | ✅ 完成 | CLIP 跨模态检索，混合图文 RRF 融合 |
+| **表格提取与增强** | ✅ 完成 | Markdown + 自然语言摘要双格式 |
+| **文档逐条评分** | ✅ 完成 | `DocumentGrader.grade()` 逐文档 embedding 相似度 |
+| **重排序兜底机制** | ✅ 完成 | 全部过滤时保留 top-1 |
+| **近似去重** | ✅ 完成 | embedding 余弦相似度 0.92 阈值 |
+| **Langfuse 监控** | ✅ 完成 | graph config 注入 callback |
+| **Milvus 连接池** | ✅ 完成 | MilvusExecutor 单例池复用 |
+
+### ⚠️ 待优化的功能（低优先级）
+
+| 优化项 | 优先级 | 影响范围 | 建议方案 |
+|--------|--------|----------|----------|
+| 内部/外部检索并行化 | P1 | 检索效率 | 将 `_retrieve_internal` 和 `_retrieve_external` 改为 `asyncio.gather()` |
+| 查询结果缓存 | P2 | 检索效率 | 引入 LRU 缓存（基于查询 hash） |
+| 工具调用超时控制 | P1 | 系统稳定性 | `asyncio.wait_for(timeout=30)` |
+| 工具重试指数退避 | P2 | 系统稳定性 | `await asyncio.sleep(2 ** attempt)` |
+| 语义去重 + MMR | P2 | 结果多样性 | embedding 相似度 > 0.95 合并，重排序后 MMR |
+| 子问题答案质量验证 | P1 | 多跳准确性 | "未知"答案触发重新检索或换方式提问 |
+| 动态对话窗口重要性过滤 | P2 | 多轮对话 | 消息重要性评分，优先保留关键实体 |
+| 显式指代消解 | P3 | 多轮对话 | 加强 `_expand_rewrite_query_with_coref` |
+| LLM 输出格式校验 | P2 | 系统稳定性 | JSON schema 校验，解析失败重试 |
+| 降级策略完善 | P2 | 系统容错 | 重排序失败回退原始排序，外部检索失败仅用内部 |
+
+### 🎯 下一步优化方向
+
+1. **性能优化**（P1）
+   - 实现查询结果缓存，减少重复检索
+   - 内部/外部检索并行化，降低延迟
+   - 工具调用添加超时和指数退避
+
+2. **质量提升**（P1-P2）
+   - 子问题答案质量验证，避免错误传播
+   - 语义去重 + MMR 多样性优化
+   - 动态阈值调整（根据任务类型）
+
+3. **用户体验**（P2）
+   - 更丰富的进度反馈（检索文档预览、评分分布）
+   - 对话历史重要性过滤
+   - 指代消解增强
+
+---
+
+## 📝 历史优先级排序（参考）
+
+> 以下为原始问题分析时的优先级排序，供参考。当前大部分 P0/P1 问题已修复。
+
+原优先级	改进项	影响范围	当前状态
+🔴 P0	实现 reasoning_context 压缩/截断	多跳推理可靠性	✅ 已完成
+🔴 P0	文档逐条评分替代合并评分	检索准确性	✅ 已完成
+🔴 P0	工具调用添加超时控制	系统稳定性	⚠️ 待优化
+🔴 P0	集成 Langfuse 监控	可观测性	✅ 已完成
+🟡 P1	流式输出	用户体验	✅ 已完成
+🟡 P1	答案来源引用	可解释性	✅ 已完成
+🟡 P1	内部/外部检索并行化	检索效率	⚠️ 待优化
+🟡 P1	子问题答案质量验证	多跳准确性	⚠️ 待优化
+🟢 P2	语义去重 + MMR 多样性	结果多样性	⚠️ 待优化
+🟢 P2	动态对话窗口	多轮对话	⚠️ 部分完成
+🟢 P2	查询结果缓存	检索效率	⚠️ 待优化

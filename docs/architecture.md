@@ -174,17 +174,83 @@ retrieve_or_respond
 **`generate_current_answer`**：答案生成
 
 - 结合检索内容 + 对话上下文 + 推理上下文生成答案
-- 支持流式 token 输出
+- 支持流式 token 输出（tags 机制精确控制）
+- **置信度计算**：基于重排序分数平均值自动标注高/中/低置信度
+- **引用溯源追踪**：记录每个子问题引用的文档编号 [1][2][3]
+- **多模态生成**：最终答案阶段传入合格图片，调用 VLM 图文联合生成
 
 **`synthesize`**：多跳答案合成
 
 - 仅在多跳场景下触发
 - 将所有子问题的推理上下文整合为最终答案
+- **引用溯源汇总**：遍历所有 reasoning_steps，生成完整的引用链摘要
 
 **`final`**：最终输出
 
 - 统一存储问答对到 `MemoryManager`（PostgresStore）
 - 可选触发 RAGAS 评估
+
+---
+
+### 4.4 多模态图片检索（CLIP）
+
+**`__retrieve_images()`**：跨模态图片检索
+
+- **CLIP 模型**：`openai/clip-vit-base-patch32`（512维），支持本地缓存
+- **并行检索**：对所有 collection 使用 `asyncio.gather()` 并发检索
+- **阈值过滤**：默认 score ≥ 0.25 才保留，避免低相关图片干扰
+- **image_id 去重**：跨 collection 按 image_id 去重，保留最高分
+- **容错设计**：单个 collection 失败不影响其他，静默跳过
+
+**混合图文 RRF 融合**：
+
+```python
+# 图片 CLIP score 归一化后与文字 rerank score 对齐
+image.rrf_score = image.score / max(max_text_score, 1e-6)
+retrieved_images.sort(key=lambda img: img.rrf_score, reverse=True)
+```
+
+**生成策略**：
+
+- **最终答案 + 合格图片**：调用 `generate_multimodal_answer()`，传入文字 + top-N 图片 base64
+- **子问题阶段 / 无合格图片**：退化为纯文字 LLM 生成，避免中间答案被无关图片干扰
+- **数量控制**：最多传入 `MAX_IMAGES_PER_QUERY`（默认 3）张图片
+
+---
+
+### 4.5 置信度计算与引用溯源
+
+**置信度计算**（`generate_node.py` 第 148-163 行）：
+
+```python
+scores = state.get("retrieval_scores", [])
+if scores:
+    avg_score = sum(scores) / len(scores)
+    if avg_score >= 0.8:
+        confidence_level = "高"
+    elif avg_score >= 0.5:
+        confidence_level = "中"
+    else:
+        confidence_level = "低"
+    answer += f"\n\n📊 置信度：{confidence_level}（{avg_score:.2f}）| 参考来源：{len(scores)} 篇文档"
+```
+
+**引用溯源**（`generate_node.py` 第 34-80 行）：
+
+- `_extract_cited_source_ids()`：从 search_content 中提取来源编号 [1][2][3]
+- `_build_citation_summary()`：遍历 reasoning_steps，生成完整引用链：
+
+```
+📎 **引用溯源**：
+- 子问题1 → 来源 [1][3]
+- 子问题2 → 来源 [2]
+```
+
+**优势**：
+
+- 用户可追溯每条信息的来源，提升答案可信度
+- 多跳场景下清晰展示每个子问题的依据
+- 便于验证和进一步探索
 
 ---
 
