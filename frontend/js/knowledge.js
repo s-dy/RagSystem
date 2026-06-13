@@ -419,8 +419,10 @@ async function loadDocuments() {
     select.innerHTML = '<option value="">-- 全部知识库 --</option>';
     cachedCollections.forEach(coll => {
         const option = document.createElement('option');
-        option.value = coll.name;
-        option.textContent = coll.name;
+        // value 使用 internal_name（后端需要的标识符）
+        option.value = coll.internal_name || coll.name || '';
+        // 显示文本使用 display_name（用户友好的名称）
+        option.textContent = coll.display_name || coll.internal_name || coll.name || '';
         select.appendChild(option);
     });
     select.value = currentValue;
@@ -501,6 +503,14 @@ function renderDocumentTable(documents) {
     }
 
     const statusMap = { uploaded: '已上传', processing: '处理中', failed: '失败' };
+    const collectionNameToDisplay = cachedCollections.reduce((map, coll) => {
+        const internalName = coll.internal_name || coll.name || '';
+        const displayName = coll.display_name || coll.internal_name || coll.name || '';
+        if (internalName) {
+            map[internalName] = displayName;
+        }
+        return map;
+    }, {});
 
     documents.forEach(doc => {
         const tr = document.createElement('tr');
@@ -526,7 +536,7 @@ function renderDocumentTable(documents) {
 
         // 所属知识库
         const tdCollection = document.createElement('td');
-        tdCollection.textContent = doc.collection_name;
+        tdCollection.textContent = doc.collection_display_name || collectionNameToDisplay[doc.collection_name] || doc.collection_name;
 
         // 上传时间
         const tdTime = document.createElement('td');
@@ -695,10 +705,20 @@ async function loadCollections() {
             throw new Error(collections.error);
         }
 
-        cachedCollections = collections;
-        updateKnowledgeStat(collections);
+        const normalizedCollections = collections.map(coll => ({
+            ...coll,
+            // 保持后端返回的 display_name，只在缺失时才用 internal_name 或 name 兜底
+            display_name: coll.display_name || coll.internal_name || coll.name || '',
+            // internal_name 优先使用后端返回的值，其次用 name 兜底
+            internal_name: coll.internal_name || coll.name || '',
+            // name 字段用于兼容旧代码，优先使用 display_name
+            name: coll.display_name || coll.internal_name || coll.name || '',
+        }));
 
-        if (!collections.length) {
+        cachedCollections = normalizedCollections;
+        updateKnowledgeStat(normalizedCollections);
+
+        if (!normalizedCollections.length) {
             grid.innerHTML = '';
             const emptyState = document.createElement('div');
             emptyState.className = 'empty-state';
@@ -722,7 +742,7 @@ async function loadCollections() {
             return;
         }
 
-        renderCollectionCards(collections);
+        renderCollectionCards(normalizedCollections);
 
     } catch (error) {
         grid.innerHTML = '';
@@ -756,9 +776,13 @@ function renderCollectionCards(collections) {
     grid.innerHTML = '';
 
     collections.forEach(coll => {
+        const displayName = coll.display_name || coll.internal_name || coll.name;
+        const internalName = coll.internal_name || coll.name;
+
         const card = document.createElement('div');
         card.className = 'collection-card';
-        card.dataset.name = coll.name;
+        card.dataset.name = (displayName || internalName).toLowerCase();
+        card.dataset.internalName = internalName;
 
         // 头部
         const header = document.createElement('div');
@@ -777,8 +801,8 @@ function renderCollectionCards(collections) {
         deleteBtn.appendChild(createSvgIcon('delete'));
         deleteBtn.addEventListener('click', async (event) => {
             event.stopPropagation();
-            if (confirm(`确定要删除知识库「${coll.name}」吗？此操作不可恢复。`)) {
-                await deleteCollection(coll.name);
+            if (confirm(`确定要删除知识库「${displayName}」吗？此操作不可恢复。`)) {
+                await deleteCollection(internalName, displayName);
             }
         });
         actionsDiv.appendChild(deleteBtn);
@@ -789,7 +813,7 @@ function renderCollectionCards(collections) {
         // 名称
         const nameDiv = document.createElement('div');
         nameDiv.className = 'collection-card-name';
-        nameDiv.textContent = coll.name;
+        nameDiv.textContent = displayName;
 
         // 描述
         const descDiv = document.createElement('div');
@@ -859,7 +883,7 @@ function updateKnowledgeStatOffline(errorMessage) {
 }
 
 // ─── 删除知识库 ───
-async function deleteCollection(collectionName) {
+async function deleteCollection(collectionName, displayName) {
     try {
         const result = await apiFetch(`${API.collections}/${encodeURIComponent(collectionName)}`, {
             method: 'DELETE',
@@ -869,7 +893,7 @@ async function deleteCollection(collectionName) {
             throw new Error(result.error);
         }
 
-        showToast(`知识库「${collectionName}」已删除`, 'success');
+        showToast(`知识库「${displayName || collectionName}」已删除`, 'success');
         loadCollections();
     } catch (error) {
         showToast(`删除失败: ${error.message}`, 'error');
@@ -935,8 +959,10 @@ function showUploadModal(files) {
     select.innerHTML = '<option value="">-- 选择已有知识库 --</option>';
     cachedCollections.forEach(coll => {
         const option = document.createElement('option');
-        option.value = coll.name;
-        option.textContent = coll.name;
+        // value 使用 internal_name（后端需要的标识符）
+        option.value = coll.internal_name || coll.name || '';
+        // 显示文本使用 display_name（用户友好的名称）
+        option.textContent = coll.display_name || coll.internal_name || coll.name || '';
         select.appendChild(option);
     });
 
@@ -1126,8 +1152,9 @@ async function uploadFiles(files, collectionName, collectionMeta = {}) {
 
         showToast(result.message || '文件上传成功，入库处理中', 'success');
 
+        const statusCollectionName = result.collection_name || collectionName;
         // 轮询入库状态
-        pollIngestStatus(collectionName, progressContainer, progressTitle, progressPercent, progressFill, dropzone, fileListEl);
+        pollIngestStatus(statusCollectionName, progressContainer, progressTitle, progressPercent, progressFill, dropzone, fileListEl);
 
     } catch (error) {
         clearInterval(progressInterval);

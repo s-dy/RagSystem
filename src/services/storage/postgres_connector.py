@@ -48,7 +48,8 @@ class PostgreSQLConnector:
         conninfo = (
             f"host={config.host} port={config.port} "
             f"user={config.user} password={config.password} "
-            f"dbname={config.dbname}"
+            f"dbname={config.dbname} "
+            f"options='-c timezone={config.timezone}'"
         )
 
         self.pool = ConnectionPool(
@@ -90,6 +91,7 @@ class PostgreSQLConnector:
         """
         result = self.execute(check_sql)
         if result and result[0][0]:
+            self._ensure_timestamp_with_timezone('parent_documents', 'created_at')
             return
 
         sql = """
@@ -97,7 +99,7 @@ class PostgreSQLConnector:
             parent_id VARCHAR(512) PRIMARY KEY,
             content TEXT NOT NULL,
             metadata JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_parent_documents_parent_id ON parent_documents (parent_id);
         """
@@ -122,6 +124,21 @@ class PostgreSQLConnector:
             metadata_json = json.dumps(doc.metadata, ensure_ascii=False, default=str)
             self.execute(sql, (parent_id, doc.page_content, metadata_json))
 
+    def _ensure_timestamp_with_timezone(self, table_name: str, column_name: str):
+        sql = """
+        SELECT data_type FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
+        """
+        rows = self.execute(sql, (table_name, column_name))
+        if not rows:
+            return
+
+        data_type = rows[0][0]
+        if data_type == 'timestamp without time zone':
+            self.execute(
+                f"ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE TIMESTAMPTZ USING {column_name} AT TIME ZONE 'UTC'"
+            )
+
     def get_parent_documents_by_ids(self, parent_ids: list[str]) -> dict[str, str]:
         """根据 parent_id 列表批量查询父文档内容
 
@@ -135,15 +152,90 @@ class PostgreSQLConnector:
         rows = self.execute(sql, tuple(parent_ids))
         return {row[0]: row[1] for row in rows} if rows else {}
 
+    def _get_table_columns(self, table_name: str) -> set[str]:
+        sql = """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """
+        rows = self.execute(sql, (table_name,))
+        return {row[0] for row in rows} if rows else set()
+
+    def _ensure_knowledge_collection_columns(self):
+        columns = self._get_table_columns('knowledge_collections')
+
+        # 为旧 schema 添加缺失列
+        if 'internal_name' not in columns:
+            self.execute(
+                "ALTER TABLE knowledge_collections ADD COLUMN internal_name VARCHAR(255)"
+            )
+            if 'collection_name' in columns:
+                self.execute(
+                    "UPDATE knowledge_collections SET internal_name = collection_name WHERE internal_name IS NULL OR internal_name = ''"
+                )
+            elif 'index' in columns:
+                self.execute(
+                    "UPDATE knowledge_collections SET internal_name = \"index\" WHERE internal_name IS NULL OR internal_name = ''"
+                )
+
+        if 'display_name' not in columns:
+            self.execute(
+                "ALTER TABLE knowledge_collections ADD COLUMN display_name VARCHAR(255)"
+            )
+            if 'internal_name' in columns:
+                self.execute(
+                    "UPDATE knowledge_collections SET display_name = internal_name WHERE display_name IS NULL OR display_name = ''"
+                )
+            elif 'collection_name' in columns:
+                self.execute(
+                    "UPDATE knowledge_collections SET display_name = collection_name WHERE display_name IS NULL OR display_name = ''"
+                )
+            elif 'index' in columns:
+                self.execute(
+                    "UPDATE knowledge_collections SET display_name = \"index\" WHERE display_name IS NULL OR display_name = ''"
+                )
+
+        if 'description' not in columns:
+            self.execute(
+                "ALTER TABLE knowledge_collections ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+            )
+
+        if 'domain' not in columns:
+            self.execute(
+                "ALTER TABLE knowledge_collections ADD COLUMN domain VARCHAR(100) NOT NULL DEFAULT 'general'"
+            )
+
+        if 'keywords' not in columns:
+            self.execute(
+                "ALTER TABLE knowledge_collections ADD COLUMN keywords JSONB NOT NULL DEFAULT '[]'"
+            )
+
+        if 'created_at' in columns:
+            self._ensure_timestamp_with_timezone('knowledge_collections', 'created_at')
+
+        # 确保 internal_name 的唯一索引存在，以支持 ON CONFLICT
+        self.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_collections_internal_name ON knowledge_collections (internal_name)"
+        )
+
+        # 填充默认值以满足新 schema 的非空约束
+        if 'internal_name' in columns and 'index' in columns:
+            self.execute(
+                "UPDATE knowledge_collections SET internal_name = \"index\" WHERE (internal_name IS NULL OR internal_name = '') AND \"index\" IS NOT NULL"
+            )
+        self.execute(
+            "UPDATE knowledge_collections SET display_name = internal_name WHERE display_name IS NULL OR display_name = ''"
+        )
+
     def create_knowledge_table(self):
         sql = """
         CREATE TABLE IF NOT EXISTS knowledge_collections (
             id SERIAL PRIMARY KEY,
-            collection_name VARCHAR(255) NOT NULL UNIQUE,
+            internal_name VARCHAR(255) NOT NULL UNIQUE,
+            display_name VARCHAR(255) NOT NULL,
             description TEXT NOT NULL,
             domain VARCHAR(100) NOT NULL,
             keywords JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
         """
         # 检查表是否存在
@@ -161,48 +253,112 @@ class PostgreSQLConnector:
             self.execute(sql)
             print("✅ Table 'knowledge_collections' created.")
         else:
+            self._ensure_knowledge_collection_columns()
             print("✅ Table 'knowledge_collections' already exists.")
 
     def insert_knowledge_collection(self, collection: Dict):
         """插入单个知识库配置"""
-        sql = """
-        INSERT INTO knowledge_collections (collection_name, description, domain, keywords)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (collection_name) DO UPDATE SET
+        columns = self._get_table_columns('knowledge_collections')
+        insert_columns = []
+        params = []
+
+        internal = collection.get('internal_name') or collection.get('index') or 'default'
+        display = collection.get('display_name') or internal
+        description = collection.get('description', '')
+        domain = collection.get('domain', 'default')
+        keywords_json = json.dumps(collection.get('keywords', []), ensure_ascii=False)
+
+        if 'collection_name' in columns:
+            insert_columns.append('collection_name')
+            params.append(internal)
+        if 'internal_name' in columns:
+            insert_columns.append('internal_name')
+            params.append(internal)
+        if 'display_name' in columns:
+            insert_columns.append('display_name')
+            params.append(display)
+        if 'description' in columns:
+            insert_columns.append('description')
+            params.append(description)
+        if 'domain' in columns:
+            insert_columns.append('domain')
+            params.append(domain)
+        if 'keywords' in columns:
+            insert_columns.append('keywords')
+            params.append(keywords_json)
+
+        if not insert_columns:
+            raise ValueError('knowledge_collections table has no supported columns')
+
+        placeholders = ', '.join(['%s'] * len(insert_columns))
+        sql = f"""
+        INSERT INTO knowledge_collections ({', '.join(insert_columns)})
+        VALUES ({placeholders})
+        ON CONFLICT (internal_name) DO UPDATE SET
+            display_name = EXCLUDED.display_name,
             description = EXCLUDED.description,
             domain = EXCLUDED.domain,
             keywords = EXCLUDED.keywords
         """
-        # 将 keywords 列表转为 JSON 字符串
-        keywords_json = json.dumps(collection.get('keywords',[]), ensure_ascii=False)
-        self.execute(sql, (
-            collection.get('index','default'),
-            collection.get('description','null'),
-            collection.get('domain','default'),
-            keywords_json
-        ))
-        logger.debug(f"[PostgreSQL] 知识库配置已更新: {collection.get('index', 'unknown')}")
+
+        self.execute(sql, tuple(params))
+        logger.debug(f"[PostgreSQL] 知识库配置已更新: {internal}")
 
     def delete_knowledge_collection(self, collection_name: str):
-        """删除指定知识库配置"""
-        sql = "DELETE FROM knowledge_collections WHERE collection_name = %s"
+        """删除指定知识库配置（使用 internal_name）"""
+        sql = "DELETE FROM knowledge_collections WHERE internal_name = %s"
         self.execute(sql, (collection_name,))
         logger.info(f"[PostgreSQL] 知识库配置已删除: {collection_name}")
 
     def get_all_collections(self) -> List[Dict]:
         """从数据库读取所有知识库配置"""
-        rows = self.execute("SELECT collection_name, description, domain, keywords FROM knowledge_collections")
+        columns = self._get_table_columns('knowledge_collections')
+        if 'index' in columns:
+            rows = self.execute(
+                "SELECT internal_name, display_name, description, domain, keywords, \"index\" FROM knowledge_collections"
+            )
+        else:
+            rows = self.execute(
+                "SELECT internal_name, display_name, description, domain, keywords FROM knowledge_collections"
+            )
+
         result = []
         for row in rows:
+            if 'index' in columns:
+                internal_name = row[0] or row[5]
+                display_name = row[1] or internal_name or row[5]
+                description = row[2]
+                domain = row[3]
+                keywords = row[4] or []
+            else:
+                internal_name = row[0]
+                display_name = row[1] or internal_name
+                description = row[2]
+                domain = row[3]
+                keywords = row[4] or []
+
+            if not internal_name:
+                continue
+
             result.append({
-                "index": row[0],
-                "description": row[1],
-                "domain": row[2],
-                "keywords": row[3]
+                "index": internal_name,
+                "internal_name": internal_name,
+                "display_name": display_name,
+                "description": description,
+                "domain": domain,
+                "keywords": keywords,
             })
 
         logger.debug(f"[PostgreSQL] 知识库配置读取完成: count={len(result)}")
         return result
+
+    def get_internal_name_by_display_name(self, display_name: str) -> str | None:
+        """根据 display_name 查询对应的 internal_name"""
+        if not display_name:
+            return None
+        sql = "SELECT internal_name FROM knowledge_collections WHERE display_name = %s LIMIT 1"
+        rows = self.execute(sql, (display_name,))
+        return rows[0][0] if rows else None
 
     def close(self):
         self.pool.close()

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -17,12 +18,21 @@ from src.core.exceptions import (
 )
 from src.graph import Graph
 from src.observability.logger import get_logger
+from src.services.storage.milvus_client import ensure_milvus_database_exists
+from config import MilvusConfig
 
 logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     """管理应用生命周期：启动时预热 Graph，关闭时释放 PostgreSQL 连接"""
+    # 启动时显式确保 Milvus 数据库存在（若配置了 Milvus）
+    try:
+        ensure_milvus_database_exists(MilvusConfig())
+        logger.info("[Server] Milvus 数据库检查完成")
+    except Exception as e:
+        logger.warning(f"[Server] 启动时 Milvus 数据库检查失败: {e}")
+
     yield
     global rag_graph
     if rag_graph is not None:
@@ -63,6 +73,35 @@ async def get_graph() -> Graph:
         rag_graph = Graph()
         await rag_graph._compile_graph()
     return rag_graph
+
+
+async def resolve_internal_collection_name(collection_name: str) -> str:
+    """支持 display_name 或 internal_name，同时返回 internal_name。"""
+    if not collection_name:
+        return ""
+    from src.services.storage import PostgreSQLConnector
+    from src.services.storage.milvus_client import sanitize_collection_name
+
+    # 如果已经是正在处理的 internal_name，则直接返回
+    if collection_name in ingest_status_store:
+        return collection_name
+
+    # 尝试通过 display_name 查询 internal_name
+    try:
+        internal_name = PostgreSQLConnector().get_internal_name_by_display_name(
+            collection_name
+        )
+        if internal_name:
+            return internal_name
+    except Exception:
+        pass
+
+    # 如果输入值已是 internal_name，则直接返回，避免重复 sanitize 变更值
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*_[0-9a-f]{8}$", collection_name):
+        return collection_name
+
+    # 否则按用户输入生成 internal_name
+    return sanitize_collection_name(collection_name)
 
 
 # ─────────────────────────── 对话 API ───────────────────────────
@@ -291,6 +330,7 @@ async def list_collections():
     try:
         from pymilvus import connections, utility
         from config import MilvusConfig
+        from src.services.storage import PostgreSQLConnector
 
         milvus_config = MilvusConfig()
         connections.connect(
@@ -300,19 +340,76 @@ async def list_collections():
             db_name=milvus_config.db_name,
             token=milvus_config.token,
         )
-        collection_names = utility.list_collections()
-        collections_info = []
-        for name in collection_names:
-            from pymilvus import Collection
 
-            coll = Collection(name)
-            coll.flush()
-            collections_info.append(
-                {
-                    "name": name,
-                    "num_entities": coll.num_entities,
-                }
-            )
+        # 首先从 PostgreSQL 读取已保存的知识库元数据
+        knowledge_bases = PostgreSQLConnector().get_all_collections()
+        
+        # 获取 Milvus 中实际存在的所有集合名称
+        actual_collections = set(utility.list_collections())
+        logger.info(f"[Server] Milvus 中实际存在的集合: {actual_collections}")
+        
+        collections_info = []
+        if knowledge_bases:
+            for kb in knowledge_bases:
+                index_name = kb.get("index")
+                display_name = kb.get("display_name") or index_name
+                num_entities = 0
+                
+                # 检查该集合是否在 Milvus 中实际存在
+                if index_name not in actual_collections:
+                    logger.warning(f"[Server] 集合 '{index_name}' 在 Milvus 中不存在")
+                    # 仍然返回信息，但 num_entities 为 0
+                    collections_info.append(
+                        {
+                            "name": index_name,
+                            "internal_name": index_name,
+                            "display_name": display_name,
+                            "description": kb.get("description", ""),
+                            "domain": kb.get("domain", ""),
+                            "keywords": kb.get("keywords", []),
+                            "num_entities": 0,
+                        }
+                    )
+                    continue
+                
+                try:
+                    from pymilvus import Collection
+
+                    coll = Collection(index_name)
+                    coll.flush()
+                    num_entities = coll.num_entities
+                    logger.info(f"[Server] 获取集合实体数: collection={index_name}, num_entities={num_entities}")
+                except Exception as e:
+                    logger.warning(f"[Server] 获取集合实体数失败: collection={index_name}, error={e}")
+                    num_entities = 0
+
+                collections_info.append(
+                    {
+                        "name": index_name,
+                        "internal_name": index_name,
+                        "display_name": display_name,
+                        "description": kb.get("description", ""),
+                        "domain": kb.get("domain", ""),
+                        "keywords": kb.get("keywords", []),
+                        "num_entities": num_entities,
+                    }
+                )
+        else:
+            collection_names = utility.list_collections()
+            for name in collection_names:
+                from pymilvus import Collection
+
+                coll = Collection(name)
+                coll.flush()
+                collections_info.append(
+                    {
+                        "name": name,
+                        "internal_name": name,
+                        "display_name": name,
+                        "num_entities": coll.num_entities,
+                    }
+                )
+
         connections.disconnect("default")
         return JSONResponse(collections_info)
     except ConnectionError as conn_err:
@@ -326,6 +423,7 @@ async def list_collections():
 @app.delete("/api/knowledge/collections/{collection_name}")
 async def delete_collection(collection_name: str):
     """删除知识库集合"""
+    internal_name = await resolve_internal_collection_name(collection_name)
     try:
         from pymilvus import connections, utility
         from config import MilvusConfig
@@ -338,14 +436,14 @@ async def delete_collection(collection_name: str):
             db_name=milvus_config.db_name,
             token=milvus_config.token,
         )
-        utility.drop_collection(collection_name)
+        utility.drop_collection(internal_name)
         connections.disconnect("default")
 
         # 同步删除 PostgreSQL 中的知识库配置
         try:
             from src.services.storage import PostgreSQLConnector
 
-            PostgreSQLConnector().delete_knowledge_collection(collection_name)
+            PostgreSQLConnector().delete_knowledge_collection(internal_name)
         except Exception as pg_err:
             logger.warning(f"[Server] 删除 PostgreSQL 知识库配置失败: {pg_err}")
 
@@ -382,6 +480,21 @@ async def upload_document(
     if not collection_name:
         collection_name = "default"
 
+    # 保留原始用户输入的 display_name，用于前端展示
+    raw_collection_name = collection_name
+
+    # 支持 collection_name 使用 display_name 或 internal_name
+    if request and request.query_params.get("collection_name"):
+        collection_name = await resolve_internal_collection_name(collection_name)
+
+    # 生成后端使用的 internal_name（Sanitize）
+    from src.services.storage.milvus_client import sanitize_collection_name
+    internal_name = (
+        collection_name
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*_[0-9a-f]{8}$", collection_name)
+        else sanitize_collection_name(collection_name)
+    )
+
     # 读取 chunk 配置：优先使用请求参数，其次使用全局配置
     global_chunk_config = getattr(
         app.state, "chunk_config", {"chunk_size": 500, "chunk_overlap": 50}
@@ -401,9 +514,9 @@ async def upload_document(
         else global_chunk_config["chunk_overlap"]
     )
     use_parent_child = (
-        request.query_params.get("use_parent_child", "false").lower() == "true"
+        request.query_params.get("use_parent_child", "true").lower() == "true"
         if request
-        else False
+        else True
     )
 
     # 知识库元数据（仅新建知识库时需要）
@@ -422,7 +535,7 @@ async def upload_document(
         unquote(request.query_params.get("keywords", "")).strip() if request else ""
     )
 
-    upload_dir = os.path.join(os.path.dirname(__file__), "uploads", collection_name)
+    upload_dir = os.path.join(os.path.dirname(__file__), "uploads", internal_name)
     os.makedirs(upload_dir, exist_ok=True)
 
     saved_files = []
@@ -441,7 +554,7 @@ async def upload_document(
 
     # 异步触发入库流程
     ingest_config = IngestConfig(
-        collection_name=collection_name,
+        collection_name=internal_name,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         use_parent_child=use_parent_child,
@@ -452,23 +565,51 @@ async def upload_document(
             "description": collection_description,
             "domain": collection_domain,
             "keywords_raw": collection_keywords_raw,
+            "display_name": raw_collection_name,
+            "internal_name": internal_name,
         }
         if is_new_collection
         else None
     )
+
+    # 先行写入元数据，避免刚创建的知识库展示为 internal_name
+    if collection_meta and collection_meta.get("is_new"):
+        try:
+            from src.services.storage import PostgreSQLConnector
+
+            keywords_raw = collection_meta.get("keywords_raw", "")
+            keywords_list = (
+                [k.strip() for k in keywords_raw.split(",") if k.strip()]
+                if keywords_raw
+                else []
+            )
+            PostgreSQLConnector().insert_knowledge_collection(
+                {
+                    "internal_name": internal_name,
+                    "display_name": raw_collection_name,
+                    "description": collection_description
+                    or f"知识库：{raw_collection_name}",
+                    "domain": collection_domain or "general",
+                    "keywords": keywords_list,
+                }
+            )
+        except Exception as pg_err:
+            logger.warning(f"[Server] 先行写入知识库配置失败: {pg_err}")
+
     logger.info(
         f"[Server] 文档上传请求: collection={collection_name}, files_count={len(files)}"
     )
     asyncio.create_task(_run_ingest(upload_dir, ingest_config, collection_meta))
 
     logger.info(
-        f"[Server] 文档上传完成: collection={collection_name}, saved_files={len(saved_files)}"
+        f"[Server] 文档上传完成: display_name={collection_name}, internal_name={internal_name}, saved_files={len(saved_files)}"
     )
 
     return JSONResponse(
         {
-            "message": f"成功上传 {len(saved_files)} 个文件到知识库「{collection_name}」，入库处理已启动",
-            "collection_name": collection_name,
+            "message": f"成功上传 {len(saved_files)} 个文件到知识库「{raw_collection_name}」，入库处理已启动",
+            "collection_name": internal_name,
+            "display_name": raw_collection_name,
             "files": saved_files,
             "ingest_status": "processing",
             "chunk_config": {
@@ -514,6 +655,8 @@ async def _run_ingest(data_path: str, config, collection_meta: dict = None):
                 PostgreSQLConnector().insert_knowledge_collection(
                     {
                         "index": config.collection_name,
+                        "internal_name": config.collection_name,
+                        "display_name": collection_meta.get("display_name") or collection_meta.get("internal_name") or config.collection_name,
                         "description": collection_meta.get("description")
                         or f"知识库：{config.collection_name}",
                         "domain": collection_meta.get("domain") or "general",
@@ -554,7 +697,8 @@ async def _run_ingest(data_path: str, config, collection_meta: dict = None):
 @app.get("/api/knowledge/ingest-status/{collection_name}")
 async def get_ingest_status(collection_name: str):
     """查询入库处理状态"""
-    status = ingest_status_store.get(collection_name)
+    internal_name = await resolve_internal_collection_name(collection_name)
+    status = ingest_status_store.get(internal_name)
     if not status:
         return JSONResponse(
             {"status": "unknown", "message": "未找到该知识库的入库记录"}
@@ -609,9 +753,23 @@ async def list_documents(collection_name: str = ""):
     import os
     from datetime import datetime
 
+    if collection_name:
+        collection_name = await resolve_internal_collection_name(collection_name)
+
     uploads_root = os.path.join(os.path.dirname(__file__), "uploads")
     if not os.path.exists(uploads_root):
         return JSONResponse([])
+
+    collection_display_map = {}
+    try:
+        from src.services.storage import PostgreSQLConnector
+
+        collection_display_map = {
+            item["index"]: item["display_name"]
+            for item in PostgreSQLConnector().get_all_collections()
+        }
+    except Exception:
+        collection_display_map = {}
 
     documents = []
 
@@ -638,6 +796,7 @@ async def list_documents(collection_name: str = ""):
                     "filename": filename,
                     "size": stat.st_size,
                     "collection_name": dir_name,
+                    "collection_display_name": collection_display_map.get(dir_name, dir_name),
                     "upload_time": datetime.fromtimestamp(stat.st_mtime).strftime(
                         "%Y-%m-%d %H:%M"
                     ),
@@ -663,6 +822,7 @@ async def delete_document(request: Request):
             {"error": "缺少 collection_name 或 filename"}, status_code=400
         )
 
+    collection_name = await resolve_internal_collection_name(collection_name)
     file_path = os.path.join(
         os.path.dirname(__file__), "uploads", collection_name, filename
     )

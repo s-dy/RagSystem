@@ -22,6 +22,7 @@ from pymilvus import (
 )
 
 from config import MilvusConfig
+from src.services.storage.milvus_client import sanitize_collection_name
 from src.observability.logger import get_logger
 from src.services.embedding.clip_embedding import get_clip_embedding
 
@@ -64,7 +65,7 @@ class MilvusImageClient:
     def __new__(cls, config: MilvusConfig = None) -> "MilvusImageClient":
         if config is None:
             config = MilvusConfig()
-        collection_name = config.collection_name + IMAGE_COLLECTION_SUFFIX
+        collection_name = sanitize_collection_name(config.collection_name) + IMAGE_COLLECTION_SUFFIX
 
         with cls._lock:
             if collection_name not in cls._instances:
@@ -79,7 +80,7 @@ class MilvusImageClient:
         if config is None:
             config = MilvusConfig()
         self.config = config
-        self.collection_name = config.collection_name + IMAGE_COLLECTION_SUFFIX
+        self.collection_name = sanitize_collection_name(config.collection_name) + IMAGE_COLLECTION_SUFFIX
         self.clip = get_clip_embedding()
         self._collection: Optional[Collection] = None
         self._connect()
