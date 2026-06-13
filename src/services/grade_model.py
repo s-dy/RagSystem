@@ -50,8 +50,16 @@ class DocumentGrader:
         :param docs: 检索到的文档内容列表
         :return: 通过相关性阈值的文档列表
         """
+        import time
+        start_time = time.time()
+        
         if not docs:
+            logger.debug("[DocumentGrader] 无文档需要评分")
             return []
+        
+        logger.info(
+            f"[DocumentGrader] 开始评分: docs_count={len(docs)}, threshold={self.threshold}, question_length={len(question)}"
+        )
         question_embedding = self.model.encode(question, convert_to_tensor=True)
         docs_embeddings = self.model.encode(docs, convert_to_tensor=True)
         similarities = util.pytorch_cos_sim(
@@ -59,16 +67,19 @@ class DocumentGrader:
         ).squeeze(0)
 
         relevant_docs = []
+        passed_count = 0
         for idx, (doc, score) in enumerate(zip(docs, similarities)):
             similarity_value = score.item()
+            if similarity_value >= self.threshold:
+                relevant_docs.append(doc)
+                passed_count += 1
             logger.debug(
                 f"[DocumentGrader] 文档评分: doc_index={idx}, score={round(similarity_value, 4)}, passed={similarity_value >= self.threshold}"
             )
-            if similarity_value >= self.threshold:
-                relevant_docs.append(doc)
 
+        elapsed = time.time() - start_time
         logger.info(
-            f"[DocumentGrader] 评分完成: total={len(docs)}, relevant={len(relevant_docs)}, threshold={self.threshold}"
+            f"[DocumentGrader] 评分完成: total={len(docs)}, relevant={len(relevant_docs)}, threshold={self.threshold}, elapsed={elapsed:.2f}s"
         )
         return relevant_docs
 

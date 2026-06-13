@@ -83,6 +83,9 @@ class GenerateNodeMixin:
         self, state, config: RunnableConfig, store: BaseStore
     ) -> dict:
         """生成当前查询的答案（支持流式输出和置信度）"""
+        import time
+        start_time = time.time()
+        
         current_q = state.get("current_sub_question") or state["original_query"]
         logger.info(f"[GenerateNode] 开始生成答案: query={current_q[:50]}...")
         conversation_context = await get_conversation_context_adaptive(
@@ -91,6 +94,9 @@ class GenerateNodeMixin:
             max_context_tokens=self.config.max_context_tokens,
         )
         docs = state["search_content"] or "未找到相关信息"
+        logger.debug(
+            f"[GenerateNode] 检索内容长度: {len(docs)}, conversation_context_length={len(conversation_context)}"
+        )
 
         # 判断是否为最终答案
         if state["task_characteristics"].is_multi_hop:
@@ -128,6 +134,9 @@ class GenerateNodeMixin:
 
         if image_base64_list and is_final:
             # 最终答案且有相关图片：调用多模态 VLM 生成
+            logger.info(
+                f"[GenerateNode] 使用多模态生成: images_count={len(image_base64_list)}"
+            )
             answer = await generate_multimodal_answer(
                 self.llm,
                 query=current_q,
@@ -144,6 +153,11 @@ class GenerateNodeMixin:
                 reasoning_context=state.get("reasoning_context", ""),
                 is_final=is_final,
             )
+        
+        elapsed = time.time() - start_time
+        logger.info(
+            f"[GenerateNode] 答案生成完成: is_final={is_final}, answer_length={len(answer)}, elapsed={elapsed:.2f}s"
+        )
 
         # 最终答案附加置信度信息
         if is_final:
@@ -159,7 +173,7 @@ class GenerateNodeMixin:
                     confidence_level = "低"
                 answer += f"\n\n📊 置信度：{confidence_level}（{avg_score:.2f}）| 参考来源：{source_count} 篇文档"
                 logger.info(
-                    f"[GenerateNode] 最终答案生成完成: confidence={confidence_level}, avg_score={avg_score:.2f}, sources={source_count}"
+                    f"[GenerateNode] 最终答案置信度: level={confidence_level}, avg_score={avg_score:.2f}, sources={source_count}"
                 )
 
         logger.debug(
@@ -193,6 +207,9 @@ class GenerateNodeMixin:
         user_id = config["configurable"].get("user_id", "default")
         # 如果不是最终答案，记录子问题答案
         if not is_final and self.memory_manager and user_id:
+            logger.debug(
+                f"[GenerateNode] 保存子问题记忆: user={user_id}, thread={thread_id}"
+            )
             await self.memory_manager.save_conversation_memory(
                 user_id=user_id,
                 thread_id=thread_id,
@@ -219,11 +236,18 @@ class GenerateNodeMixin:
         self, state, config: RunnableConfig, store: BaseStore
     ) -> dict:
         """合并多跳子问题答案，并在最终答案中附加完整的引用溯源信息"""
+        import time
+        start_time = time.time()
+        
         if not state["task_characteristics"].is_multi_hop:
+            logger.debug("[GenerateNode] 非多跳任务，跳过综合")
             return {}
         logger.info("[GenerateNode] 开始综合多跳答案")
         question = state["original_query"]
         reasoning_ctx = state.get("reasoning_context", "")
+        logger.debug(
+            f"[GenerateNode] 推理上下文长度: {len(reasoning_ctx)}"
+        )
         answer = await synthesize_final_subs(
             self.llm,
             query=question,
@@ -236,8 +260,14 @@ class GenerateNodeMixin:
         )
         if citation_summary:
             answer = answer + "\n\n" + citation_summary
+            logger.debug(
+                f"[GenerateNode] 已附加引用溯源: length={len(citation_summary)}"
+            )
 
-        logger.info(f"[GenerateNode] 多跳答案综合完成: answer_length={len(answer)}")
+        elapsed = time.time() - start_time
+        logger.info(
+            f"[GenerateNode] 多跳答案综合完成: answer_length={len(answer)}, elapsed={elapsed:.2f}s"
+        )
         return {"answer": answer}
 
     async def __final(self, state, config: RunnableConfig):
@@ -263,6 +293,9 @@ class GenerateNodeMixin:
                 query=question,
                 conversation_context=conversation_context,
             )
+            logger.info(
+                f"[GenerateNode] 直接对话生成完成: answer_length={len(answer)}"
+            )
         else:
             # 需要检索：使用已有的 answer
             answer = state.get("answer") or ""
@@ -270,6 +303,9 @@ class GenerateNodeMixin:
 
         # 统一存储最终问答对
         if self.memory_manager and user_id and question and answer:
+            logger.debug(
+                f"[GenerateNode] 保存最终问答记忆: user={user_id}, thread={thread_id}, question_length={len(question)}, answer_length={len(answer)}"
+            )
             await self.memory_manager.save_conversation_memory(
                 user_id=user_id,
                 thread_id=thread_id,

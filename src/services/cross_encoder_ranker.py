@@ -44,12 +44,15 @@ class CrossEncoderRanker:
         self, query: str, retrieved_docs: list[str], threshold: float = 0.8
     ) -> list[tuple[str, float]]:
         """重排序文档并按阈值过滤，返回 (文档内容, 分数) 列表"""
+        import time
+        start_time = time.time()
+        
         if not retrieved_docs:
             logger.debug("[CrossEncoderRanker] 无文档需要重排序")
             return []
 
-        logger.debug(
-            f"[CrossEncoderRanker] 开始重排序: docs_count={len(retrieved_docs)}, threshold={threshold}"
+        logger.info(
+            f"[CrossEncoderRanker] 开始重排序: docs_count={len(retrieved_docs)}, threshold={threshold}, query_length={len(query)}"
         )
         pairs = [(query, doc) for doc in retrieved_docs]
         scores = self.model.predict(pairs)
@@ -61,8 +64,11 @@ class CrossEncoderRanker:
         reranked_docs = [
             (doc, score) for doc, score in reranked_docs if score > threshold
         ]
+        
+        elapsed = time.time() - start_time
+        filtered_count = len(retrieved_docs) - len(reranked_docs)
         logger.info(
-            f"[CrossEncoderRanker] 重排序完成: input={len(retrieved_docs)}, output={len(reranked_docs)}, filtered={len(retrieved_docs) - len(reranked_docs)}"
+            f"[CrossEncoderRanker] 重排序完成: input={len(retrieved_docs)}, output={len(reranked_docs)}, filtered={filtered_count}, elapsed={elapsed:.2f}s"
         )
         return reranked_docs
 

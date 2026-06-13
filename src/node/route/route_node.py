@@ -41,8 +41,11 @@ class RouteNodeMixin:
         self, state, config: RunnableConfig, store: BaseStore
     ) -> dict:
         """统一入口：决定是否需要检索，并初始化多跳结构"""
-        logger.info("[RouteNode] 开始路由决策")
         messages = state["messages"]
+        query = get_last_user_msg(messages)
+        logger.info(
+            f"[RouteNode] 开始路由决策: query_length={len(query)}, messages_count={len(messages)}"
+        )
 
         # === 策略 1：跨轮对话历史压缩 ===
         compress_result = {}
@@ -65,8 +68,11 @@ class RouteNodeMixin:
                 compress_result["messages"] = build_remove_and_replace_messages(
                     messages, compressed
                 )
+                original_len = len(messages)
+                compressed_len = len(compressed)
+                compression_ratio = (1 - compressed_len / original_len) * 100 if original_len > 0 else 0
                 logger.info(
-                    f"[RouteNode] 对话历史压缩完成: original={len(messages)}, compressed={len(compressed)}"
+                    f"[RouteNode] 对话历史压缩完成: original={original_len}, compressed={compressed_len}, ratio={compression_ratio:.1f}%"
                 )
                 messages = compressed
 
@@ -116,13 +122,15 @@ class RouteNodeMixin:
         if task_char.is_multi_hop:
             # 多跳：需要分解（空列表表示待分解）
             sub_questions = []
+            logger.info(
+                f"[RouteNode] 多跳检索模式: query={query[:50]}..., will_decompose=True"
+            )
         else:
             # 单跳：直接作为一步多跳
             sub_questions = [query]
-
-        logger.info(
-            f"[RouteNode] 检索模式: query={query[:50]}..., is_multi_hop={task_char.is_multi_hop}"
-        )
+            logger.info(
+                f"[RouteNode] 单跳检索模式: query={query[:50]}..."
+            )
 
         return {
             **compress_result,
@@ -157,9 +165,12 @@ class RouteNodeMixin:
                 sub_questions = [item["query"] for item in enhanced_result]
             else:
                 sub_questions = [query]  # 分解失败回退到单跳
+                logger.warning(
+                    f"[RouteNode] 多跳问题分解失败，回退到单跳: query={query[:50]}..."
+                )
 
             logger.info(
-                f"[RouteNode] 多跳问题分解完成: sub_questions_count={len(sub_questions)}"
+                f"[RouteNode] 多跳问题分解完成: sub_questions_count={len(sub_questions)}, questions={[q[:30]+'...' if len(q)>30 else q for q in sub_questions]}"
             )
 
             # 子问题分解可视化：向用户展示分解结果
@@ -184,7 +195,10 @@ class RouteNodeMixin:
         # 情况2：已有子问题，准备当前子问题
         if state["sub_questions"]:
             current = state["sub_questions"][0]
-            logger.debug(f"[RouteNode] 准备当前子问题: {current[:50]}...")
+            remaining = len(state["sub_questions"]) - 1
+            logger.debug(
+                f"[RouteNode] 准备当前子问题: current={current[:50]}..., remaining={remaining}"
+            )
 
             return {
                 "current_sub_question": current,
@@ -223,27 +237,35 @@ class RouteNodeMixin:
 
         if not enhanced_result:
             enhanced_result = enhancer.parse_query_time([query])
-
-        logger.info(f"[RouteNode] 查询增强完成: enhanced_count={len(enhanced_result)}")
+            logger.debug(
+                f"[RouteNode] 查询增强无结果，使用时间解析兜底: enhanced_count={len(enhanced_result)}"
+            )
+        else:
+            logger.info(
+                f"[RouteNode] 查询增强完成: enhanced_count={len(enhanced_result)}, strategies={enhancer_config.dict()}"
+            )
 
         # 查询路由
         logger.info("[RouteNode] 开始查询路由")
-        queries = [_["query"] for _ in enhanced_result]
+        queries = [_['query'] for _ in enhanced_result]
         knowledge_bases = await asyncio.to_thread(
             PostgreSQLConnector().get_all_collections
         )
-
+        
         internal_routes = {}
         if not knowledge_bases:
             # 知识库配置为空，跳过 LLM 路由，使用默认 collection 兜底
             from config import MilvusConfig
-
+        
             default_collection = MilvusConfig.collection_name
             internal_routes[default_collection] = queries
             logger.warning(
                 f"[RouteNode] 知识库配置为空，使用默认collection: {default_collection}"
             )
         else:
+            logger.debug(
+                f"[RouteNode] 知识库列表: {[kb.get('display_name', kb.get('index')) for kb in knowledge_bases]}"
+            )
             query_route = QueryRouter(self.llm)
             route_result = await query_route.multi_all_queries_index_router(
                 queries, knowledge_bases
@@ -251,7 +273,7 @@ class RouteNodeMixin:
             for route in route_result:
                 idx = route["index"]
                 internal_routes[idx] = queries
-
+        
             # 最终兜底：LLM 路由结果仍为空时，使用所有知识库
             if not internal_routes:
                 logger.warning("[RouteNode] 路由结果为空，兜底到全部知识库")
@@ -259,8 +281,10 @@ class RouteNodeMixin:
                     kb_index = kb.get("index", "")
                     if kb_index:
                         internal_routes[kb_index] = queries
-
-        logger.info(f"[RouteNode] 路由完成: collections={list(internal_routes.keys())}")
+        
+        logger.info(
+            f"[RouteNode] 路由完成: collections={list(internal_routes.keys())}, queries_count={len(queries)}"
+        )
 
         result = {"router_index": internal_routes}
         if not state.get("current_sub_question"):  # 只有主问题才更新 run_count

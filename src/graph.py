@@ -130,17 +130,34 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
 
     async def start(self, input_data: dict, config: RunnableConfig = None):
         graph = await self._compile_graph()
-        # 设置请求ID用于日志追踪
         thread_id = (
             config.get("configurable", {}).get("thread_id", "unknown")
             if config
             else "unknown"
         )
         set_request_id(thread_id)
+        
+        query_preview = ""
+        if input_data.get("messages"):
+            from langchain_core.messages import HumanMessage
+            for msg in reversed(input_data["messages"]):
+                if isinstance(msg, HumanMessage):
+                    query_preview = msg.content[:100]
+                    break
+        
+        logger.info(
+            f"[Graph] 开始推理: thread_id={thread_id}, query={query_preview}..."
+        )
+        
         try:
-            return await graph.ainvoke(input_data, config)
+            result = await graph.ainvoke(input_data, config)
+            answer_preview = result.get("answer", "")[:100] if result else ""
+            logger.info(
+                f"[Graph] 推理完成: thread_id={thread_id}, answer_length={len(result.get('answer', ''))}, answer_preview={answer_preview}..."
+            )
+            return result
         except Exception as e:
-            logger.error(f"[Graph] 推理失败: {e}")
+            logger.error(f"[Graph] 推理失败: thread_id={thread_id}, error={e}")
             raise
 
     async def start_stream(self, input_data: dict, config: RunnableConfig = None):
@@ -162,9 +179,22 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
             else "unknown"
         )
         set_request_id(thread_id)
+        
+        query_preview = ""
+        if input_data.get("messages"):
+            from langchain_core.messages import HumanMessage
+            for msg in reversed(input_data["messages"]):
+                if isinstance(msg, HumanMessage):
+                    query_preview = msg.content[:100]
+                    break
+        
+        logger.info(
+            f"[Graph] 开始流式推理: thread_id={thread_id}, query={query_preview}..."
+        )
 
         # 是否为多跳场景（用于控制 token 展示策略）
         is_multi_hop = False
+        token_count = 0
 
         try:
             # 使用 astream 并设置 stream_mode 实现逐 token 流式
@@ -205,6 +235,7 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                             should_stream = False
 
                         if should_stream and msg_chunk.content:
+                            token_count += 1
                             yield {
                                 "type": "token",
                                 "content": msg_chunk.content,
@@ -248,6 +279,9 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
                                         }
 
             # 流结束标记
+            logger.info(
+                f"[Graph] 流式推理完成: thread_id={thread_id}, total_tokens={token_count}, is_multi_hop={is_multi_hop}"
+            )
             yield {"type": "done"}
 
         except asyncio.CancelledError:

@@ -29,25 +29,36 @@ class RetrievalNodeMixin:
 
     async def __retrieve_internal(self, router_index) -> List[RetrievedDoc]:
         """处理内部检索，返回 RetrievedDoc 列表"""
+        import time
+        start_time = time.time()
+        
         doc_result: List[RetrievedDoc] = []
         if not router_index:
+            logger.warning("[RetrievalNode] 路由索引为空，跳过内部检索")
             return doc_result
         logger.info(
-            f"[RetrievalNode] 开始内部检索: collections={list(router_index.keys())}"
+            f"[RetrievalNode] 开始内部检索: collections={list(router_index.keys())}, total_queries={sum(len(qs) for qs in router_index.values())}"
         )
         search_model = FusionRetrieve(
             use_parent_child=self.config.enable_parent_child_retrieval
         )
         for collection_index, queries in router_index.items():
             try:
+                logger.debug(
+                    f"[RetrievalNode] 检索collection: {collection_index}, queries_count={len(queries)}"
+                )
                 result = await search_model.search_queries(
                     queries, collection_name=collection_index
                 )
                 if not result:
+                    logger.debug(f"[RetrievalNode] collection={collection_index} 无结果")
                     continue
                 for doc_list in result:
                     if doc_list:
                         doc_result.extend(doc_list)
+                logger.debug(
+                    f"[RetrievalNode] collection={collection_index} 检索完成: docs_count={sum(len(dl) for dl in result)}"
+                )
             except ConnectionError as conn_err:
                 raise InternalRetrievalError(collection_index, cause=conn_err)
             except TimeoutError as timeout_err:
@@ -58,7 +69,11 @@ class RetrievalNodeMixin:
                 logger.warning(
                     f"[RetrievalNode] 检索出错: collection={collection_index}, error={exc}"
                 )
-        logger.info(f"[RetrievalNode] 内部检索完成: total_docs={len(doc_result)}")
+        
+        elapsed = time.time() - start_time
+        logger.info(
+            f"[RetrievalNode] 内部检索完成: total_docs={len(doc_result)}, elapsed={elapsed:.2f}s"
+        )
         return doc_result
 
     async def __retrieve_external(self, query: str, max_retries: int = 2) -> list:
@@ -216,13 +231,21 @@ class RetrievalNodeMixin:
         # 交叉编码器重排序
         rerank_scores: List[float] = []
         if unique_retrieved:
+            rerank_start = asyncio.get_event_loop().time()
             rerank_query = state.get("current_sub_question") or state["original_query"]
             doc_texts = [d.content for d in unique_retrieved]
+            logger.debug(
+                f"[RetrievalNode] 开始交叉编码重排序: docs_count={len(doc_texts)}, query={rerank_query[:50]}..."
+            )
             reranked = await asyncio.to_thread(
                 self.cross_encoder_ranker.reranker,
                 rerank_query,
                 doc_texts,
                 threshold=self.config.reranker_threshold,
+            )
+            rerank_elapsed = asyncio.get_event_loop().time() - rerank_start
+            logger.info(
+                f"[RetrievalNode] 交叉编码重排序完成: input={len(doc_texts)}, output={len(reranked)}, elapsed={rerank_elapsed:.2f}s"
             )
 
             # 用重排序结果重建有序列表，保留来源信息
@@ -288,10 +311,16 @@ class RetrievalNodeMixin:
         )
 
         # 图片跨模态检索（CLIP）：与文字检索并行发起，用当前查询检索相关图片
+        image_retrieve_start = asyncio.get_event_loop().time()
         retrieved_images = await self.__retrieve_images(
             query=query,
             router_index=state.get("router_index"),
         )
+        image_retrieve_elapsed = asyncio.get_event_loop().time() - image_retrieve_start
+        if retrieved_images:
+            logger.info(
+                f"[RetrievalNode] 图片检索完成: images_count={len(retrieved_images)}, elapsed={image_retrieve_elapsed:.2f}s"
+            )
 
         # 混合图文 RRF 融合：将图片 CLIP score 归一化后与文字 rerank score 联合排序
         # 图片按 score 降序已在 __retrieve_images 中完成，此处仅记录融合后的排名供生成节点使用

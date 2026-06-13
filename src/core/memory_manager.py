@@ -39,13 +39,14 @@ class MemoryManager:
     ):
         """保存用户偏好设置"""
         if not self.store:
+            logger.debug("[MemoryManager] Store未初始化，跳过保存用户偏好")
             return
 
         key = f"user:{user_id}:preference:{preference_key}"
         value = {"value": preference_value, "timestamp": time.time(), "ttl": ttl}
         await self.store.aput(("memory",), key=key, value=value)
-        logger.debug(
-            f"[MemoryManager] 保存用户偏好: user={user_id}, key={preference_key}"
+        logger.info(
+            f"[MemoryManager] 保存用户偏好: user={user_id}, key={preference_key}, ttl={ttl}s"
         )
 
     async def get_user_preference(
@@ -53,6 +54,7 @@ class MemoryManager:
     ) -> Any:
         """获取用户偏好设置，自动检查 TTL 是否过期"""
         if not self.store:
+            logger.debug("[MemoryManager] Store未初始化，返回默认值")
             return default_value
 
         key = f"user:{user_id}:preference:{preference_key}"
@@ -61,8 +63,17 @@ class MemoryManager:
             if result and isinstance(result, dict):
                 if self._is_expired(result):
                     await self.store.adelete(("memory",), key)
+                    logger.info(
+                        f"[MemoryManager] 用户偏好已过期并删除: user={user_id}, key={preference_key}"
+                    )
                     return default_value
+                logger.debug(
+                    f"[MemoryManager] 获取用户偏好成功: user={user_id}, key={preference_key}"
+                )
                 return result.get("value", default_value)
+            logger.debug(
+                f"[MemoryManager] 用户偏好不存在: user={user_id}, key={preference_key}"
+            )
             return default_value
         except Exception as exc:
             logger.warning(
@@ -80,6 +91,7 @@ class MemoryManager:
     ):
         """保存对话记忆"""
         if not self.store:
+            logger.debug("[MemoryManager] Store未初始化，跳过保存对话记忆")
             return
 
         timestamp = time.time()
@@ -91,8 +103,8 @@ class MemoryManager:
             "ttl": ttl,
         }
         await self.store.aput(("memory",), key=key, value=value)
-        logger.debug(
-            f"[MemoryManager] 保存对话记忆: user={user_id}, thread={thread_id}, type={memory_type}"
+        logger.info(
+            f"[MemoryManager] 保存对话记忆: user={user_id}, thread={thread_id}, type={memory_type}, ttl={ttl}s"
         )
 
     async def get_recent_conversation_memories(
@@ -100,6 +112,7 @@ class MemoryManager:
     ) -> List[Dict]:
         """获取最近的对话记忆，自动过滤已过期的条目"""
         if not self.store:
+            logger.debug("[MemoryManager] Store未初始化，返回空列表")
             return []
 
         prefix = f"conversation:{user_id}:{thread_id}:{memory_type}:"
@@ -107,19 +120,27 @@ class MemoryManager:
             ("memory",), filter={"prefix": prefix}, limit=100
         )
         valid_results = []
+        expired_count = 0
         for item in items:
             if not (item.value and isinstance(item.value, dict)):
                 continue
             if self._is_expired(item.value):
                 try:
                     await self.store.adelete(("memory",), item.key)
+                    expired_count += 1
                 except Exception:
                     pass
                 continue
             valid_results.append(item.value)
         valid_results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-        logger.debug(
-            f"[MemoryManager] 获取对话记忆: user={user_id}, thread={thread_id}, type={memory_type}, count={len(valid_results[:limit])}"
+        
+        if expired_count > 0:
+            logger.info(
+                f"[MemoryManager] 清理过期记忆: user={user_id}, thread={thread_id}, type={memory_type}, expired={expired_count}"
+            )
+        
+        logger.info(
+            f"[MemoryManager] 获取对话记忆: user={user_id}, thread={thread_id}, type={memory_type}, total_found={len(valid_results)}, returned={len(valid_results[:limit])}"
         )
         return valid_results[:limit]
 
