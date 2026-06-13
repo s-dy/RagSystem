@@ -5,7 +5,7 @@ from docx import Document as DocxDocument
 from pypdf import PdfReader
 
 # 支持的文件扩展名
-SUPPORTED_EXTENSIONS = {'.pdf', '.doc', '.docx', '.md', '.markdown'}
+SUPPORTED_EXTENSIONS = {'.pdf', '.doc', '.docx', '.md', '.markdown', '.txt'}
 
 
 def _load_pdf(file_path: str) -> Optional[str]:
@@ -34,6 +34,26 @@ def _load_docx(file_path: str) -> Optional[str]:
         return None
 
 
+def _load_text(file_path: str) -> Optional[str]:
+    """从文本文件中读取内容"""
+    try:
+        # 尝试多种编码方式读取文本文件
+        encodings = ['utf-8', 'gbk', 'gb2312', 'latin-1']
+        for encoding in encodings:
+            try:
+                with open(file_path, "r", encoding=encoding) as f:
+                    content = f.read().strip()
+                if content:
+                    return content
+            except UnicodeDecodeError:
+                continue
+        print(f"Failed to decode text file {file_path} with supported encodings")
+        return None
+    except Exception as e:
+        print(f"Failed to read text file {file_path}: {e}")
+        return None
+
+
 def _load_markdown(file_path: str) -> Optional[str]:
     """从 Markdown 文件中读取文本内容"""
     try:
@@ -51,7 +71,7 @@ def _get_file_extension(file_path: str) -> str:
 
 
 def _load_single_document(file_path: str) -> Optional[LCDocument]:
-    """根据文件扩展名加载单个文档，支持 pdf、doc/docx、markdown"""
+    """根据文件扩展名加载单个文档，支持 pdf、doc/docx、markdown、txt"""
     extension = _get_file_extension(file_path)
     if extension not in SUPPORTED_EXTENSIONS:
         return None
@@ -63,6 +83,8 @@ def _load_single_document(file_path: str) -> Optional[LCDocument]:
         content = _load_docx(file_path)
     elif extension in (".md", ".markdown"):
         content = _load_markdown(file_path)
+    elif extension == ".txt":
+        content = _load_text(file_path)
 
     if not content:
         return None
@@ -80,7 +102,7 @@ def _load_single_document(file_path: str) -> Optional[LCDocument]:
 
 def load_document(load_path: str) -> List[LCDocument]:
     """
-    加载指定路径的文档，支持 pdf、doc/docx、markdown 格式。
+    加载指定路径的文档，支持 pdf、doc/docx、markdown、txt 格式。
     支持单个文件路径或文件夹路径(递归加载所有支持格式的文件)。
     """
     if not os.path.exists(load_path):

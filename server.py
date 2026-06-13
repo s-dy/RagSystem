@@ -570,10 +570,10 @@ async def get_model_status():
     """获取当前模型配置状态"""
     import os
 
-    llm_model = os.getenv("QWEN_MODEL_NAME", "未配置")
-    llm_base_url = os.getenv("QWEN_BASE_URL", "")
+    llm_model = os.getenv("QWEN_MODEL_NAME") or os.getenv("DASHSCOPE_MODEL_NAME") or "未配置"
+    llm_base_url = os.getenv("QWEN_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL", "")
     llm_provider = (
-        "DashScope (通义千问)" if "dashscope" in llm_base_url else llm_base_url
+        "DashScope (通义千问)" if "dashscope" in llm_base_url else llm_base_url or "未知"
     )
 
     embedding_model = "qwen3-embedding:0.6B"

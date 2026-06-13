@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.services.data_load import ChunkHandler, load_document
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "test_data", "知识图谱构建技术综述_刘峤.pdf")
+DATA_PATH = os.path.join(os.path.dirname(__file__),"..","assets", "十日终焉+作者：杀虫队队员（完结）.txt")
 
 
 def print_separator(title: str):

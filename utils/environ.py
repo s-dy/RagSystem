@@ -7,7 +7,7 @@ def set_huggingface_hf_env():
     os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
     os.environ["HF_HUB_ENABLE_HF_MIRROR"] = "true"
     # 设置模型缓存环境
-    cache_dir = os.environ.get('HF_HOME') or (Path(os.environ['HOME']) / '.cache' / 'huggingface' / 'hub').as_posix()
+    cache_dir = os.environ.get('HF_HOME', "") or (Path(os.environ.get("HOME","")) / '.cache' / 'huggingface' / 'hub').as_posix()
     if cache_dir:
         os.environ["TRANSFORMERS_CACHE"] = cache_dir
         os.environ["HF_HOME"] = cache_dir
