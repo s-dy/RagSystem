@@ -108,6 +108,7 @@ class PostgreSQLConfig:
     user: str = os.getenv("POSTGRES_USER", "postgres")
     password: str = os.getenv("POSTGRES_PASSWORD", "")
     dbname: str = os.getenv("POSTGRES_DBNAME", "hybridragsystem")
+    timezone: str = os.getenv("POSTGRES_TIMEZONE", "Asia/Shanghai")
     autocommit: bool = True
 
 
