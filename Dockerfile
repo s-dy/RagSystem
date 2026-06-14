@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.4
-
 # 多阶段构建：builder 用于安装并构建虚拟环境，production 仅拷贝运行时环境
 FROM docker.m.daocloud.io/library/python:3.11-slim AS builder
 
@@ -13,16 +11,19 @@ RUN apt-get update \
 # 先复制依赖描述以利用缓存（仅当 pyproject/uv.lock 变化时才重新安装包）
 COPY pyproject.toml uv.lock ./
 
-# 安装 uv（使用 pip 缓存挂载以加速重复构建）
-RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir uv
-
-# 创建虚拟环境
-RUN uv venv /opt/venv
+# 创建虚拟环境，并确保 venv 中包含 pip
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/python -m ensurepip --upgrade \
+    && /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel
 ENV VIRTUAL_ENV=/opt/venv PATH="/opt/venv/bin:$PATH"
 
-# 再复制代码并在 venv 中安装（使用 pip 缓存）
+# 再复制代码并在 venv 中安装项目依赖
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/pip uv pip install --system -e .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/venv/bin/pip install --no-cache-dir -e . \
+    --prefer-binary --retries 10 --timeout 120 \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn
 
 ### 生产阶段：只包含运行时与虚拟环境
 FROM docker.m.daocloud.io/library/python:3.11-slim
