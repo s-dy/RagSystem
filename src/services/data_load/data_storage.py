@@ -178,7 +178,7 @@ class DataDBStorage:
         self.collection_name = config.collection_name
         vector = self._get_vector_store()
 
-        async def _batch_add_documents(vector_client, documents, batch_size=500):
+        async def _batch_add_documents(vector_client, documents, batch_size=500, progress_callback=None):
             total = len(documents)
             if total == 0:
                 return 0
@@ -191,7 +191,16 @@ class DataDBStorage:
                 try:
                     await vector_client.aadd_documents(documents=documents[start:end])
                     inserted += end - start
-                    logger.info(f"[DataStorage] 已写入 Milvus 批次: {i+1}/{batches}, cumulative={inserted}")
+                    progress = int((inserted / total) * 100)
+                    logger.info(f"[DataStorage] 已写入 Milvus 批次: {i+1}/{batches}, cumulative={inserted}, progress={progress}%")
+                    
+                    # 调用进度回调（如果提供）
+                    if progress_callback:
+                        try:
+                            progress_callback(inserted, total, progress)
+                        except Exception as cb_err:
+                            logger.warning(f"[DataStorage] 进度回调失败: {cb_err}")
+                            
                 except Exception as exc:
                     logger.error(f"[DataStorage] 写入 Milvus 失败 at batch {i+1}/{batches}: {exc}")
                     raise StorageError(f"写入 Milvus 失败", exc)
@@ -213,7 +222,27 @@ class DataDBStorage:
             if child_docs:
                 try:
                     milvus_start = time.time()
-                    inserted = await _batch_add_documents(vector.client, child_docs)
+                    
+                    # 定义进度回调函数，更新 ingest_status_store
+                    def update_progress(inserted, total, progress_percent):
+                        from server import ingest_status_store
+                        try:
+                            ingest_status_store[config.collection_name] = {
+                                "status": "processing",
+                                "message": f"正在写入向量数据库... {progress_percent}% ({inserted}/{total})",
+                                "progress": progress_percent,
+                                "inserted": inserted,
+                                "total": total,
+                                "result": None,
+                            }
+                        except Exception as store_err:
+                            logger.warning(f"[DataStorage] 更新进度状态失败: {store_err}")
+                    
+                    inserted = await _batch_add_documents(
+                        vector.client, 
+                        child_docs, 
+                        progress_callback=update_progress
+                    )
                     
                     # Flush 确保数据持久化并立即可查询
                     flush_start = time.time()
@@ -275,7 +304,27 @@ class DataDBStorage:
             if chunks:
                 try:
                     milvus_start = time.time()
-                    inserted = await _batch_add_documents(vector.client, chunks)
+                    
+                    # 定义进度回调函数，更新 ingest_status_store
+                    def update_progress(inserted, total, progress_percent):
+                        from server import ingest_status_store
+                        try:
+                            ingest_status_store[config.collection_name] = {
+                                "status": "processing",
+                                "message": f"正在写入向量数据库... {progress_percent}% ({inserted}/{total})",
+                                "progress": progress_percent,
+                                "inserted": inserted,
+                                "total": total,
+                                "result": None,
+                            }
+                        except Exception as store_err:
+                            logger.warning(f"[DataStorage] 更新进度状态失败: {store_err}")
+                    
+                    inserted = await _batch_add_documents(
+                        vector.client, 
+                        chunks, 
+                        progress_callback=update_progress
+                    )
                     
                     # Flush 确保数据持久化并立即可查询
                     flush_start = time.time()

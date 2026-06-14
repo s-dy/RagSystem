@@ -1177,7 +1177,7 @@ async function uploadFiles(files, collectionName, collectionMeta = {}) {
 
 // ─── 入库状态轮询 ───
 async function pollIngestStatus(collectionName, progressContainer, progressTitle, progressPercent, progressFill, dropzone, fileListEl) {
-    const maxAttempts = 60;
+    const maxAttempts = 1200;  // 1200次 * 3秒 = 3600秒 = 60分钟
     const intervalMs = 3000;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -1224,11 +1224,20 @@ async function pollIngestStatus(collectionName, progressContainer, progressTitle
                 return;
             }
 
-            // 仍在处理中，更新进度提示
-            const progressValue = Math.min(50 + attempt * 2, 95);
-            progressFill.style.width = progressValue + '%';
-            progressPercent.textContent = progressValue + '%';
-            progressTitle.textContent = statusData.message || '正在处理入库...';
+            // 仍在处理中，使用真实进度（如果提供）
+            if (statusData.progress !== undefined && statusData.progress !== null) {
+                // 使用后端提供的真实进度
+                const realProgress = statusData.progress;
+                progressFill.style.width = realProgress + '%';
+                progressPercent.textContent = realProgress + '%';
+                progressTitle.textContent = statusData.message || `正在处理入库... ${realProgress}%`;
+            } else {
+                // 降级：如果没有进度信息，使用基于轮询次数的估算
+                const progressValue = Math.min(50 + attempt * 2, 95);
+                progressFill.style.width = progressValue + '%';
+                progressPercent.textContent = progressValue + '%';
+                progressTitle.textContent = statusData.message || '正在处理入库...';
+            }
 
         } catch (error) {
             console.warn('轮询入库状态失败:', error.message);
