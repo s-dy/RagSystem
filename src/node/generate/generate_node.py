@@ -134,9 +134,9 @@ class GenerateNodeMixin:
 
         if image_base64_list and is_final:
             # 最终答案且有相关图片：调用多模态 VLM 生成
-            logger.info(
-                f"[GenerateNode] 使用多模态生成: images_count={len(image_base64_list)}"
-            )
+            # logger.info(
+            #     f"[GenerateNode] 使用多模态生成: images_count={len(image_base64_list)}"
+            # )
             answer = await generate_multimodal_answer(
                 self.llm,
                 query=current_q,

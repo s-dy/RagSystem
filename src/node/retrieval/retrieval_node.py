@@ -310,27 +310,27 @@ class RetrievalNodeMixin:
             f"[RetrievalNode] 融合检索完成: unique_docs={len(unique_retrieved)}, reranked_docs={len(ordered_docs)}, avg_score={avg_score:.3f}"
         )
 
-        # 图片跨模态检索（CLIP）：与文字检索并行发起，用当前查询检索相关图片
-        image_retrieve_start = asyncio.get_event_loop().time()
-        retrieved_images = await self.__retrieve_images(
-            query=query,
-            router_index=state.get("router_index"),
-        )
-        image_retrieve_elapsed = asyncio.get_event_loop().time() - image_retrieve_start
-        if retrieved_images:
-            logger.info(
-                f"[RetrievalNode] 图片检索完成: images_count={len(retrieved_images)}, elapsed={image_retrieve_elapsed:.2f}s"
-            )
+        # # 图片跨模态检索（CLIP）：与文字检索并行发起，用当前查询检索相关图片
+        # image_retrieve_start = asyncio.get_event_loop().time()
+        # retrieved_images = await self.__retrieve_images(
+        #     query=query,
+        #     router_index=state.get("router_index"),
+        # )
+        # image_retrieve_elapsed = asyncio.get_event_loop().time() - image_retrieve_start
+        # if retrieved_images:
+        #     logger.info(
+        #         f"[RetrievalNode] 图片检索完成: images_count={len(retrieved_images)}, elapsed={image_retrieve_elapsed:.2f}s"
+        #     )
 
-        # 混合图文 RRF 融合：将图片 CLIP score 归一化后与文字 rerank score 联合排序
-        # 图片按 score 降序已在 __retrieve_images 中完成，此处仅记录融合后的排名供生成节点使用
-        if retrieved_images and rerank_scores:
-            max_text_score = max(rerank_scores) if rerank_scores else 1.0
-            for image in retrieved_images:
-                # 将 CLIP 内积分数（0~1）归一化到与文字 rerank score 相同量级
-                image.rrf_score = image.score / max(max_text_score, 1e-6)
-            retrieved_images.sort(key=lambda img: img.rrf_score, reverse=True)
-
+        # # 混合图文 RRF 融合：将图片 CLIP score 归一化后与文字 rerank score 联合排序
+        # # 图片按 score 降序已在 __retrieve_images 中完成，此处仅记录融合后的排名供生成节点使用
+        # if retrieved_images and rerank_scores:
+        #     max_text_score = max(rerank_scores) if rerank_scores else 1.0
+        #     for image in retrieved_images:
+        #         # 将 CLIP 内积分数（0~1）归一化到与文字 rerank score 相同量级
+        #         image.rrf_score = image.score / max(max_text_score, 1e-6)
+        #     retrieved_images.sort(key=lambda img: img.rrf_score, reverse=True)
+        retrieved_images = []  # 图片检索暂时关闭，返回空列表
         return {
             "search_content": content,
             "retrieved_documents": retrieved_docs_text,

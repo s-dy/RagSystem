@@ -8,6 +8,7 @@
 """
 
 import asyncio
+from dataclasses import asdict
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
@@ -242,7 +243,7 @@ class RouteNodeMixin:
             )
         else:
             logger.info(
-                f"[RouteNode] 查询增强完成: enhanced_count={len(enhanced_result)}, strategies={enhancer_config.dict()}"
+                f"[RouteNode] 查询增强完成: enhanced_count={len(enhanced_result)}, strategies={asdict(enhancer_config)}"
             )
 
         # 查询路由
