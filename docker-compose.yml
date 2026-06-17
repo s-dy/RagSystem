@@ -19,6 +19,8 @@ services:
       # Huggingface 模型路径
       HF_MODELS_PATH: /app/tf_models
       HF_HOME: /app/tf_models
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_ENABLE_HF_MIRROR: "true"
 
       # 数据库配置（连接宿主机/外部服务）
       POSTGRES_HOST: ${POSTGRES_HOST:-host.docker.internal}

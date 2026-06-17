@@ -16,13 +16,18 @@ class CrossEncoderRanker:
 
     def __init__(self):
         # 加载预训练的交叉编码器模型
-        home_dir = os.getenv("HOME", "")
         hf_models_path = os.getenv("HF_MODELS_PATH", "")
-        if not home_dir or not hf_models_path:
+        if not hf_models_path:
             self.model = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=512)
             return
-        local_model_path = (
-            home_dir + hf_models_path + "/models--BAAI--bge-reranker-v2-m3/snapshots/"
+        
+        # 使用本地路径加载时，设置离线模式避免 transformers 尝试联网
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+        
+        # hf_models_path 是绝对路径，直接使用
+        local_model_path = os.path.join(
+            hf_models_path, "models--BAAI--bge-reranker-v2-m3", "snapshots"
         )
         # 获取最新的snapshot
         snapshots_dir = Path(local_model_path)

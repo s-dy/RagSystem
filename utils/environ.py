@@ -12,4 +12,15 @@ def set_huggingface_hf_env():
         os.environ["TRANSFORMERS_CACHE"] = cache_dir
         os.environ["HF_HOME"] = cache_dir
         os.environ["SENTENCE_TRANSFORMERS_HOME"] = cache_dir
+    
+    # 检查关键模型是否已在本地缓存，如果是则设置离线模式
+    # 避免 transformers 尝试联网下载
+    reranker_cache = Path(cache_dir) / "models--BAAI--bge-reranker-v2-m3"
+    if reranker_cache.exists():
+        # 检查是否有完整的 snapshot
+        snapshots_dir = reranker_cache / "snapshots"
+        if snapshots_dir.exists() and list(snapshots_dir.glob("*")):
+            print(f"[environ] 检测到本地 reranker 模型缓存，设置离线模式")
+            os.environ['HF_HUB_OFFLINE'] = '1'
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
 

@@ -151,11 +151,21 @@ class Graph(RouteNodeMixin, RetrievalNodeMixin, GenerateNodeMixin):
         
         try:
             result = await graph.ainvoke(input_data, config)
-            answer_preview = result.get("answer", "")[:100] if result else ""
+            # 从 result 中提取 answer：优先用 answer 字段，否则从 messages 最后一个 AI 消息提取
+            answer = ""
+            if result and result.get("answer"):
+                answer = result["answer"]
+            elif result and result.get("messages"):
+                from langchain_core.messages import AIMessage
+                for msg in reversed(result["messages"]):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        answer = msg.content
+                        break
+            answer_preview = answer[:100] if answer else ""
             logger.info(
-                f"[Graph] 推理完成: thread_id={thread_id}, answer_length={len(result.get('answer', ''))}, answer_preview={answer_preview}..."
+                f"[Graph] 推理完成: thread_id={thread_id}, answer_length={len(answer)}, answer_preview={answer_preview}..."
             )
-            return result
+            return {"answer": answer}
         except Exception as e:
             logger.error(f"[Graph] 推理失败: thread_id={thread_id}, error={e}")
             raise

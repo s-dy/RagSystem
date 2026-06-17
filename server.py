@@ -123,18 +123,22 @@ async def chat(request: Request):
         f"[Server] 非流式对话请求: thread_id={thread_id}, user_id={user_id}, message={message[:50]}..."
     )
 
-    graph = await get_graph()
-    input_data = {"messages": [HumanMessage(content=message)]}
-    config = {
-        "configurable": {
-            "thread_id": thread_id,
-            "user_id": user_id,
-            "enable_web_search": enable_web_search,
+    try:
+        graph = await get_graph()
+        input_data = {"messages": [HumanMessage(content=message)]}
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "user_id": user_id,
+                "enable_web_search": enable_web_search,
+            }
         }
-    }
 
-    result = await graph.start(input_data, config)
-    answer = result.get("answer", "")
+        result = await graph.start(input_data, config)
+        answer = result.get("answer", "")
+    except Exception as e:
+        logger.error(f"[Server] 对话处理失败: thread_id={thread_id}, error={e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
     # 记录会话
     if thread_id not in conversations:
