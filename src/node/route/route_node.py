@@ -265,7 +265,7 @@ class RouteNodeMixin:
             )
         else:
             logger.debug(
-                f"[RouteNode] 知识库列表: {[kb.get('display_name', kb.get('index')) for kb in knowledge_bases]}"
+                f"[RouteNode] 知识库列表: display={[kb.get('display_name') for kb in knowledge_bases]}, internal={[kb.get('index') for kb in knowledge_bases]}"
             )
             query_route = QueryRouter(self.llm)
             route_result = await query_route.multi_all_queries_index_router(

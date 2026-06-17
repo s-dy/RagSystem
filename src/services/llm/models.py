@@ -33,6 +33,7 @@ def get_embedding_model(model,b=0.6,**kwargs):
 
     embeddings = init_embeddings(
         model=model_name,
+        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     )
     return embeddings
 

@@ -36,6 +36,9 @@ services:
       # Redis 配置（连接宿主机/外部服务）
       REDIS_URI: ${REDIS_URI:-redis://host.docker.internal:6379}
 
+      # Ollama 配置（连接宿主机）
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+
       # 日志配置
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 

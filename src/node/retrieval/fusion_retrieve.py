@@ -2,6 +2,12 @@ import asyncio
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
+# PyMilvus 在不同版本中异常所在模块不同，兼容导入
+try:
+    from pymilvus.exceptions import ConnectionNotExistException
+except (ImportError, ModuleNotFoundError):
+    from pymilvus.errors import ConnectionNotExistException
+
 from src.observability.logger import get_logger
 from src.services.storage import PostgreSQLConnector, MilvusExecutor, MilvusConfig
 
@@ -21,37 +27,73 @@ class FusionRetrieve:
         self.use_parent_child = use_parent_child
 
     async def _search_single_query(self, query: str, collection_name: str = None) -> List[RetrievedDoc]:
-        """异步搜索单个查询，返回带来源和分数的结构化结果"""
+        """异步搜索单个查询，返回带来源和分数的结构化结果。
+
+        当底层 Milvus 连接失效（ConnectionNotExistException）时，自动触发一次重连后重试。
+        """
+        logger.debug(f"[FusionRetrieve] 开始单查询检索: query={query[:50]}..., collection={collection_name}, use_parent_child={self.use_parent_child}")
+        executor = MilvusExecutor(MilvusConfig(collection_name=collection_name))
         try:
-            vector_client = MilvusExecutor(MilvusConfig(collection_name=collection_name)).client
-            # # weighted
-            # result = await vector_client.asimilarity_search_with_score(
-            #     query, k=4, ranker_type="weighted", ranker_params={"weights": [0.7, 0.3]}
-            # )
-            # rrf
-            result = await vector_client.asimilarity_search_with_score(
-                query, k=4, ranker_type="rrf", ranker_params={"k": 60}
+            return await self._do_search(executor, query)
+        except ConnectionNotExistException as e:
+            # PyMilvus 连接断开，触发重连后重试一次
+            query_preview = query[:50] + "..." if len(query) > 50 else query
+            logger.warning(
+                f"[FusionRetrieve] 连接失效，尝试重连后重试: query={query_preview}, error={e}"
             )
-            # filtered = [(doc, score) for doc, score in result if score >= 0.2]
-
-            if self.use_parent_child:
-                return await self._resolve_parent_documents_structured(result)
-
-            retrieved_docs = []
-            for doc, score in result:
-                source = doc.metadata.get("source", "未知来源")
-                retrieved_docs.append(RetrievedDoc(
-                    content=doc.page_content,
-                    source=source,
-                    score=float(score),
-                ))
-                query_preview = query[:50] + "..." if len(query) > 50 else query
-                logger.debug(f"[FusionRetrieve] 单查询检索完成: query={query_preview}, docs_count={len(retrieved_docs)}")
-            return retrieved_docs
+            try:
+                executor._reconnect()
+                return await self._do_search(executor, query)
+            except Exception as retry_err:
+                logger.error(
+                    f"[FusionRetrieve] 重连后检索仍失败: query={query_preview}, error={retry_err}"
+                )
+                return []
         except Exception as e:
+            # 兜底：部分 PyMilvus 版本异常类型不同，通过消息字符串判断
+            err_str = str(e)
+            if "ConnectionNotExistException" in str(type(e)) or "should create connection first" in err_str:
+                query_preview = query[:50] + "..." if len(query) > 50 else query
+                logger.warning(
+                    f"[FusionRetrieve] 连接失效（兜底捕获）, 尝试重连: query={query_preview}"
+                )
+                try:
+                    executor._reconnect()
+                    return await self._do_search(executor, query)
+                except Exception as retry_err:
+                    logger.error(f"[FusionRetrieve] 重连后仍失败: {retry_err}")
+                    return []
             query_preview = query[:50] + "..." if len(query) > 50 else query
             logger.error(f"[FusionRetrieve] 单查询检索失败: query={query_preview}, error={e}")
             return []
+
+    async def _do_search(self, executor: MilvusExecutor, query: str) -> List[RetrievedDoc]:
+        """执行实际的向量检索，返回结构化结果列表。"""
+        vector_client = executor.client
+        # # weighted
+        # result = await vector_client.asimilarity_search_with_score(
+        #     query, k=4, ranker_type="weighted", ranker_params={"weights": [0.7, 0.3]}
+        # )
+        # rrf
+        result = await vector_client.asimilarity_search_with_score(
+            query, k=4, ranker_type="rrf", ranker_params={"k": 60}
+        )
+        # filtered = [(doc, score) for doc, score in result if score >= 0.2]
+
+        if self.use_parent_child:
+            return await self._resolve_parent_documents_structured(result)
+
+        retrieved_docs = []
+        for doc, score in result:
+            source = doc.metadata.get("source", "未知来源")
+            retrieved_docs.append(RetrievedDoc(
+                content=doc.page_content,
+                source=source,
+                score=float(score),
+            ))
+        query_preview = query[:50] + "..." if len(query) > 50 else query
+        logger.debug(f"[FusionRetrieve] 单查询检索完成: query={query_preview}, docs_count={len(retrieved_docs)}")
+        return retrieved_docs
 
     async def _resolve_parent_documents_structured(self, search_results: List[Tuple]) -> List[RetrievedDoc]:
         """将子文档检索结果回溯到父文档，返回结构化结果。"""

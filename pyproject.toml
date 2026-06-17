@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
-    "pymilvus>=2.5.0",
+    "pymilvus>=2.5.0,<2.6.0",
     "blockbuster>=1.5.26",
     "cloudpickle>=3.1.2",
     "jieba3k>=0.35.1",
@@ -17,7 +17,7 @@ dependencies = [
     "langchain>=1.2.0",
     "langchain-community==1.0.0a1",
     "langchain-core>=1.0.0",
-    "langchain-milvus>=0.3.2",
+    "langchain-milvus>=0.2.0,<0.3.0",
     "langchain-ollama>=1.0.1",
     "langchain-openai>=1.1.6",
     "langchain-text-splitters>=1.1.0",
