@@ -17,13 +17,24 @@ RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel
 ENV VIRTUAL_ENV=/opt/venv PATH="/opt/venv/bin:$PATH"
 
-# 再复制代码并在 venv 中安装项目依赖
-COPY . .
+# ⚠️ 先只安装依赖（从 pyproject.toml 提取），不装项目本身
+# 这样改代码不会导致 pip 重跑——只有改 pyproject.toml 才会
 RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/venv/bin/pip install --no-cache-dir -e . \
+    /opt/venv/bin/pip install $(\
+        python3 -c "\
+import tomllib;\
+deps = tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'];\
+print(' '.join(deps))"\
+    ) \
     --prefer-binary --retries 10 --timeout 120 \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 源代码最后复制（这层经常变，但上面依赖层已被缓存）
+COPY . .
+
+# 以可编辑模式注册项目包（--no-deps 跳过依赖重装，秒级完成）
+RUN /opt/venv/bin/pip install -e . --no-deps
 
 ### 生产阶段：只包含运行时与虚拟环境
 FROM docker.m.daocloud.io/library/python:3.11-slim
